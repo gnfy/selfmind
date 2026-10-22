@@ -269,3 +269,54 @@ func TestWorkSelectDirectContinuationReportsPriorVerificationFacts(t *testing.T)
 		})
 	}
 }
+
+func TestWorkSelectParkedClarificationRequiresAnswerAndResolvesOption(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	person, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
+	parentTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "audit", Channel: "cli"})
+	parentRun, _ := store.StartRun(ctx, parentTask, "cli", "audit system")
+	clarify, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: person.TenantID, PersonID: person.PersonID, TaskID: parentTask.ID, RunID: parentRun.ID,
+		Question: "Which scope?", Options: []byte(`["Full 7-day audit","Quick 24h check"]`), Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.FinishRun(ctx, person.TenantID, parentRun.ID, "waiting_user")
+
+	childTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "follow up", Channel: "cli-2"})
+	childRun, _ := store.StartRun(ctx, childTask, "cli-2", "choose 1")
+	scope := kernel.ToolInvocationScope{
+		ControlTenantID: person.TenantID, PersonID: person.PersonID,
+		TaskID: childTask.ID, RunID: childRun.ID, ExecutionLane: "main",
+	}
+	tool := NewWorkSelectTool(store)
+
+	if _, err := tool.Execute(map[string]interface{}{
+		"action": "resume", "run_id": parentRun.ID, "_invocation_scope": scope,
+	}); err == nil || !strings.Contains(err.Error(), clarify.ID) || !strings.Contains(err.Error(), "Full 7-day audit") {
+		t.Fatalf("resume without answer err=%v, want pending clarification guidance", err)
+	}
+	if raw, _ := store.RunWorkSelection(ctx, person.TenantID, person.PersonID, childRun.ID); len(raw) != 0 {
+		t.Fatalf("refused resume must not record work.selection: %s", raw)
+	}
+
+	out, err := tool.Execute(map[string]interface{}{
+		"action": "resume", "run_id": parentRun.ID, "answer": "1", "_invocation_scope": scope,
+	})
+	if err != nil || !strings.Contains(out, `"status":"proposed"`) {
+		t.Fatalf("resume with answer out=%s err=%v", out, err)
+	}
+	raw, err := store.RunWorkSelection(ctx, person.TenantID, person.PersonID, childRun.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"clarify_id":"`+clarify.ID+`"`) || !strings.Contains(string(raw), `"answer":"Full 7-day audit"`) {
+		t.Fatalf("work.selection payload = %s, want clarify_id and resolved answer", raw)
+	}
+}

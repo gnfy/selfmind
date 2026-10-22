@@ -68,7 +68,7 @@ func TestMinimalVerificationKeepsDurableObligation(t *testing.T) {
 		changed["replaces"], changed["reason"] = "first", "correct the method"
 		result, err := check("invalid", changed)
 		if err == nil || calls != 1 || result.Invoked == nil || *result.Invoked || len(result.Evidence) != 0 {
-			t.Fatalf("changed identity reached execution: %+v / %v", result, err)
+			t.Fatalf("changed identity reached execution for %+v: %+v / %v", changed, result, err)
 		}
 	}
 	corrected, err := check("corrected", map[string]interface{}{"replaces": "first", "reason": "correct the method"})

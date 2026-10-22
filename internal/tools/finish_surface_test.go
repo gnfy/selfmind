@@ -24,6 +24,7 @@ func TestFinishAdvertisesOneBodyAndRetainsLegacyArguments(t *testing.T) {
 	for _, args := range []map[string]interface{}{
 		{"status": "waiting_user", "summary": "Legacy handoff", "next_steps": []interface{}{"User confirms target"}},
 		{"status": "done", "final_response": "Complete reply."},
+		{"status": "done", "final_response": "Complete reply.", "explanation": "All steps complete."},
 	} {
 		if _, err := r.DispatchResult("finish_run", args); err != nil {
 			t.Fatalf("compatible finish refused: %v", err)

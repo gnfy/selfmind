@@ -145,7 +145,22 @@ func extractJSONObject(raw string) (string, bool) {
 	if start < 0 || end <= start {
 		return "", false
 	}
-	return raw[start : end+1], true
+	candidate := raw[start : end+1]
+	if json.Valid([]byte(candidate)) {
+		return candidate, true
+	}
+	for last := end; last > start; last = strings.LastIndex(raw[:last], "}") {
+		for first := strings.LastIndex(raw[:last], "{"); first >= start; first = strings.LastIndex(raw[:first], "{") {
+			sub := raw[first : last+1]
+			if json.Valid([]byte(sub)) {
+				return sub, true
+			}
+			if first == 0 {
+				break
+			}
+		}
+	}
+	return candidate, true
 }
 
 // Guardian denial circuit breaker.

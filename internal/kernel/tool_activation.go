@@ -210,20 +210,25 @@ func activeSkillNeedsViewTool(skill *ActiveSkillContext, maxChars int) bool {
 }
 
 // activateToolsForActiveSkill exposes skill_view whenever the runtime context
-// carries an active paged Skill, matching mid-turn skill_select activation.
+// carries an active paged Skill or bounded Skill candidates for the current
+// work unit, matching work-unit boundary activation so a mid-turn skill_select
+// does not mutate the tools array and invalidate the provider prompt cache.
 func activateToolsForActiveSkill(ctx context.Context) []string {
 	var skill *ActiveSkillContext
+	var candidates []SkillCandidateContext
 	maxChars := 8 * 1024
-	if selected, ok := SkillRuntimeContextFromContext(ctx); ok && selected.Active != nil {
+	if selected, ok := SkillRuntimeContextFromContext(ctx); ok {
 		skill = selected.Active
-	} else if bundle, ok := RuntimeContextBundleFromContext(ctx); ok && bundle.ActiveSkill != nil {
+		candidates = selected.Candidates
+	} else if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
 		skill = bundle.ActiveSkill
+		candidates = bundle.SkillCandidates
 		maxChars = bundle.Budget.SkillMainBytes
 	}
-	if skill == nil {
+	if skill == nil && len(candidates) == 0 {
 		return nil
 	}
-	if skill.WorkUnitSequence > 0 {
+	if skill != nil && skill.WorkUnitSequence > 0 {
 		if state, ok := toolActivationStateFromContext(ctx); ok {
 			state.mu.Lock()
 			if state.unitSequence == 0 {
@@ -232,7 +237,7 @@ func activateToolsForActiveSkill(ctx context.Context) []string {
 			state.mu.Unlock()
 		}
 	}
-	if activeSkillNeedsViewTool(skill, maxChars) {
+	if activeSkillNeedsViewTool(skill, maxChars) || (skill == nil && len(candidates) > 0) {
 		return activateDeferredTools(ctx, []string{"skill_view"})
 	}
 	return nil

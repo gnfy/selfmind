@@ -63,3 +63,16 @@ func TestPreboundPagedActiveSkillActivatesSkillView(t *testing.T) {
 		t.Fatal("expected pre-bound paged Active Skill in SkillRuntimeContext to activate skill_view")
 	}
 }
+
+func TestSkillCandidatesPreActivateSkillViewToPreservePromptCache(t *testing.T) {
+	ctx := WithSkillRuntimeContext(context.Background(), SkillRuntimeContext{
+		Candidates: []SkillCandidateContext{{Name: "k8s-sre-triage", Description: "Triage workloads"}},
+	})
+	ctx = withToolActivationState(ctx)
+	if !deferredToolActive(ctx, "skill_view") {
+		t.Fatal("expected SkillRuntimeContext candidates to pre-activate skill_view before iteration 1")
+	}
+	if added := activateToolsFromSearchResult(ctx, "skill_select", `{"delivery_mode":"paged"}`); len(added) != 0 {
+		t.Fatalf("expected mid-turn skill_select not to mutate active tool set, got %v", added)
+	}
+}

@@ -286,3 +286,54 @@ func TestMarkInterruptedRunsPreservesParkedClarify(t *testing.T) {
 		t.Fatalf("clarify after sweep = %+v, want pending", got)
 	}
 }
+
+func TestResolveClarifyOptionAndParkedSelectionComposition(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, run := newClarifyFixture(t)
+	created, err := store.CreateClarifyRequest(ctx, ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Question: "pick scope", Options: []byte(`["Full audit","Quick check"]`), Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	sourceTask, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "follow up", Channel: "cli-other",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceRun, err := store.StartRun(ctx, sourceTask, "cli-other", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.EnqueueSelectedContinuation(ctx, identity.TenantID, identity.PersonID, sourceRun.ID, run.ID, QueuedTask{
+		Channel: "cli-other", Platform: "cli", Content: "continue without answering",
+	}); err == nil {
+		t.Fatal("EnqueueSelectedContinuation without ClarifyID must refuse to claim a parent with a pending clarification")
+	}
+	if n, err := store.ExpireOrphanedClarifies(ctx); err != nil || n != 0 {
+		t.Fatalf("refused selection must not orphan the pending clarification: expired=%d err=%v", n, err)
+	}
+
+	queued, err := store.EnqueueSelectedContinuation(ctx, identity.TenantID, identity.PersonID, sourceRun.ID, run.ID, QueuedTask{
+		Channel: "cli-other", Platform: "cli", Content: "2", ClarifyID: created.ID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueSelectedContinuation with ClarifyID: %v", err)
+	}
+	if queued == nil || queued.ClarifyID != created.ID || queued.ReplyToRunID != run.ID || queued.Content != "Quick check" {
+		t.Fatalf("queued continuation = %+v, want ClarifyID=%s ReplyToRunID=%s Content=Quick check", queued, created.ID, run.ID)
+	}
+	answered, err := store.GetClarifyRequest(ctx, identity.TenantID, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answered == nil || answered.Status != "answered" || answered.Answer != "Quick check" {
+		t.Fatalf("clarify after atomic selection commit = %+v, want answered Quick check", answered)
+	}
+}

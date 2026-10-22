@@ -293,7 +293,7 @@ func clientOnly(program string, args []string) bool {
 	case "helm":
 		return rest[0] == "version" || rest[0] == "env"
 	case "kubectl", "argocd":
-		return rest[0] == "version" && client
+		return (rest[0] == "version" && client) || (program == "kubectl" && rest[0] == "config")
 	}
 	return false
 }

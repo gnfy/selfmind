@@ -138,6 +138,9 @@ func (e spineEntry) toMessages() []llm.Message {
 	}
 	if e.Outcome != "" {
 		fmt.Fprintf(&b, "turn_outcome: %s\n", e.Outcome)
+		if e.RunID != "" && (e.Outcome == "waiting_user" || e.Outcome == "interrupted" || e.Outcome == "blocked" || strings.HasPrefix(e.Outcome, "incomplete:")) {
+			fmt.Fprintf(&b, "resume_hint: if the user's current message continues this work, call work_select(action=\"resume\", run_id=%q) first before running commands or skills\n", e.RunID)
+		}
 	}
 	if e.WorkspaceID != "" {
 		fmt.Fprintf(&b, "workspace_id: %s\n", e.WorkspaceID)

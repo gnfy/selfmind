@@ -16,3 +16,23 @@ func finishModelSchema(legacy ToolSchema) ToolSchema {
 }
 
 func (t *FinishRunTool) argumentSchema() ToolSchema { return t.legacySchema }
+
+func (t *FinishRunTool) NormalizeArguments(args map[string]interface{}) (map[string]interface{}, error) {
+	if args == nil {
+		return nil, nil
+	}
+	if _, hasExplanation := args["explanation"]; !hasExplanation {
+		return args, nil
+	}
+	if _, isString := args["explanation"].(string); !isString {
+		return args, nil
+	}
+	cloned := make(map[string]interface{}, len(args))
+	for k, v := range args {
+		if k == "explanation" {
+			continue
+		}
+		cloned[k] = v
+	}
+	return cloned, nil
+}

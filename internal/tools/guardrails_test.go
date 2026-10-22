@@ -220,6 +220,67 @@ func TestToolGuardrailsAllowFiniteRemoteStatusBatch(t *testing.T) {
 	}
 }
 
+func TestToolGuardrailsDistinguishMixedObservationBatchesFromPolling(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		allowed       bool
+	}{
+		{"mixed PR reads", `for pr in 101 202; do gh pr view "$pr" --repo example/project --json files; gh pr diff "$pr" --repo example/project; done`, true},
+		{"incident with presentation", `cd /workspace && for n in 101 202 303; do echo "--- PR $n ---"; gh pr view $n --repo example/project --json files --jq '.files[] | "\(.path) +\(.additions)/-\(.deletions)"'; gh pr diff $n --repo example/project | grep -E '^[+-][^+-]' | head -8; done`, true},
+		{"diff only", `for pr in 301 402; do gh pr diff "$pr" --repo other/project --name-only; done`, true},
+		{"derived PR selector", `for spec in api:101 web:202; do pr=${spec#*:}; gh pr diff "$pr" --repo example/project; gh pr view "$pr" --repo example/project --json title; done`, true},
+		{"cross provider reads", `for id in 101 202; do gh pr diff "$id" --repo example/project; aws codebuild batch-get-builds --ids "$id"; done`, true},
+		{"other read operations", `for app in web api; do argocd app get "$app"; argocd app diff "$app"; done`, true},
+		{"same target", `for attempt in 1 2; do gh pr diff 101 --repo example/project; done`, false},
+		{"one repeated query among distinct reads", `for pr in 101 202; do gh pr view "$pr" --repo example/project; gh pr diff 101 --repo example/project; done`, false},
+		{"overwritten selector", `for pr in 101 202; do pr=101; gh pr diff "$pr" --repo example/project; done`, false},
+		{"duplicate targets", `for pr in 101 101; do gh pr diff "$pr" --repo example/project; done`, false},
+		{"display option changes only", `for color in always never; do gh pr diff 101 --repo example/project --color "$color"; done`, false},
+		{"unbounded wait", `while true; do gh pr diff 101 --repo example/project; sleep 5; done`, false},
+		{"hidden repeated query", `for pr in 101 202; do gh pr diff "$pr" --repo example/project; gh pr view 999 --repo example/project; done`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			exec := NewToolGuardrails().Middleware(func(map[string]interface{}) (string, error) {
+				called = true
+				return "synthetic observation", nil
+			})
+			_, err := exec(map[string]interface{}{"_tool_name": "terminal", "command": tc.command})
+			if tc.allowed {
+				if err != nil || !called {
+					t.Fatalf("finite distinct observations refused: called=%v err=%v", called, err)
+				}
+			} else {
+				var facts interface{ ToolErrorCode() string }
+				if !errors.As(err, &facts) || facts.ToolErrorCode() != "active_turn_polling" || called {
+					t.Fatalf("polling was not redirected before execution: called=%v err=%v", called, err)
+				}
+			}
+		})
+	}
+}
+
+func TestToolGuardrailsObservationRecognitionDoesNotGrantApproval(t *testing.T) {
+	for _, command := range []string{
+		`gh pr diff 101 --repo example/project`,
+		`for pr in 101 202; do gh pr view "$pr" --repo example/project; gh pr diff "$pr" --repo example/project; done`,
+		`gh pr merge 101 --repo example/project`,
+		`gh pr diff 101 --repo example/project; gh pr merge 101 --repo example/project`,
+	} {
+		if deterministicObservationExec("terminal", map[string]interface{}{"command": command}) {
+			t.Fatalf("waiting-policy recognition granted automatic approval: %s", command)
+		}
+	}
+	denied := errors.New("synthetic approval denial")
+	exec := NewToolGuardrails().Middleware(func(map[string]interface{}) (string, error) {
+		return "", denied
+	})
+	_, err := exec(map[string]interface{}{"_tool_name": "terminal", "command": `for pr in 101 202; do gh pr view "$pr"; gh pr diff "$pr"; done`})
+	if !errors.Is(err, denied) {
+		t.Fatalf("finite batch did not preserve the next middleware's refusal: %v", err)
+	}
+}
+
 func TestToolGuardrailsAllowFiniteBatchWithDestructuredIterator(t *testing.T) {
 	for _, command := range []string{
 		`for spec in "cw3-return-go-api:v20261014162544:dev" "cw3-return-web-shop:v20261014165212:dev"; do repo=${spec%%:*}; rest=${spec#*:}; tag=${rest%%:*}; br=${rest##*:}; gh api "repos/channelwill/$repo/compare/$tag...$br" --jq '{status: .status, ahead_by: .ahead_by}'; done`,
@@ -461,6 +522,8 @@ func TestToolGuardrailsAllowBoundedFanoutWithCommandSubstitutionAndGuards(t *tes
 	for _, command := range []string{
 		`for spec in "cw3-return-go-api:v20261014162544:dev" "cw3-return-web-shop:v20261014165212:dev"; do repo=${spec%%:*}; rest=${spec#*:}; tag=${rest%%:*}; br=${rest##*:}; out=$(gh api "repos/channelwill/$repo/compare/$tag...$br" --jq '{status: .status, ahead_by: .ahead_by}'); if [ -z "$out" ]; then continue; fi; echo "=== $repo ==="; echo "$out" | sed 's/^/  /'; git -C "/workspace/$repo" status -sb; done`,
 		`for repo in api web; do for sh in $(gh api "repos/org/$repo/commits" --jq '.[].sha'); do gh api "repos/org/$repo/commits/$sh/pulls"; done; done`,
+		`set -e; CTX="arn:aws:eks:ap-southeast-1:111122223333:cluster/prod"; NS="platform"; for svc in svc-a svc-b svc-c; do kubectl --context "$CTX" -n "$NS" get deploy "$svc"; done`,
+		`ORG="acme"; for item in "repo-a:v1" "repo-b:v2"; do name="${item%%:*}"; tag="${item#*:}"; gh release view "$tag" --repo "$ORG/$name"; done`,
 	} {
 		called := false
 		exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
@@ -473,5 +536,16 @@ func TestToolGuardrailsAllowBoundedFanoutWithCommandSubstitutionAndGuards(t *tes
 		}); err != nil || !called {
 			t.Fatalf("bounded fan-out loop was refused: command=%q err=%v called=%v", command, err, called)
 		}
+	}
+	// A loop that only references an outer scalar variable without varying by
+	// the loop iterator is still polling, not fan-out.
+	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+		return "ok", nil
+	})
+	if _, err := exec(map[string]interface{}{
+		"_tool_name": "terminal",
+		"command":    `CTX="prod"; for i in 1 2 3; do kubectl --context "$CTX" get pods -n app; done`,
+	}); err == nil || !strings.Contains(err.Error(), "watch_external") {
+		t.Fatalf("expected outer-only loop without iterator variation to be blocked as polling, got %v", err)
 	}
 }

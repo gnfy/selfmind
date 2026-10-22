@@ -17,17 +17,32 @@ import (
 // literal list. This never runs commands, reads files or inherits host env.
 // Unsupported control flow or expansions keep the polling redirect.
 func loopObservesIterator(clause *syntax.ForClause) bool {
+	return loopObservesIteratorWithBindings(clause, nil)
+}
+
+func loopObservesIteratorWithBindings(clause *syntax.ForClause, outer map[string]string) bool {
 	iter, ok := clause.Loop.(*syntax.WordIter)
-	if !ok || iter.Name == nil || !finiteLiteralForLoop(clause) {
+	if !ok || iter.Name == nil || !finiteLiteralForLoopWithBindings(clause, outer) {
 		return false
 	}
+	baseOuter := cleanOuterBindingsForLoop(clause, outer)
 	seen := map[string]bool{}
 	for _, item := range iter.Items {
-		fields, known := fanoutFields([]*syntax.Word{item}, nil)
+		fields, known := fanoutFields([]*syntax.Word{item}, baseOuter)
 		if !known || len(fields) != 1 {
 			return false
 		}
-		values := map[string]string{iter.Name.Value: fields[0]}
+		values := cloneObservationBindings(baseOuter)
+		values[iter.Name.Value] = fields[0]
+		for _, stmt := range clause.Do {
+			if !fanoutStatement(stmt, values, seen, false) {
+				return false
+			}
+		}
+	}
+	if len(iter.Items) == 1 && len(baseOuter) > 0 {
+		values := cloneObservationBindings(baseOuter)
+		values[iter.Name.Value] = "__fanout_iter_probe__"
 		for _, stmt := range clause.Do {
 			if !fanoutStatement(stmt, values, seen, false) {
 				return false
@@ -35,6 +50,26 @@ func loopObservesIterator(clause *syntax.ForClause) bool {
 		}
 	}
 	return len(seen) > 0
+}
+
+func cleanOuterBindingsForLoop(clause *syntax.ForClause, outer map[string]string) map[string]string {
+	if len(outer) == 0 || clause == nil {
+		return nil
+	}
+	out := make(map[string]string, len(outer))
+	for k, v := range outer {
+		if k == "" || k == "IFS" || unsafeObservationVarName(k) {
+			continue
+		}
+		out[k] = v
+	}
+	if iter, ok := clause.Loop.(*syntax.WordIter); ok && iter.Name != nil {
+		delete(out, iter.Name.Value)
+	}
+	for _, stmt := range clause.Do {
+		invalidateOuterAssignedVars(stmt, out)
+	}
+	return out
 }
 
 func fanoutStatement(stmt *syntax.Stmt, values map[string]string, seen map[string]bool, pipeline bool) bool {

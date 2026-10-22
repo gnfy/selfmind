@@ -54,52 +54,6 @@ func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run
 	}
 }
 
-func (c *RunCoordinator) startAsyncProgressNotices(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, runID string) func() {
-	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || router.ShouldStreamToClient(req.Channel) {
-		return func() {}
-	}
-	// Sender-aware delivery policy: never mint outbound rows that no platform
-	// sender can deliver. CLI/system async runs in particular have no push
-	// surface for a 30s progress stream (and forwarding progress ticks to the
-	// preferred IM would violate the IM cadence contract — concise notices and
-	// final results only); their FINAL result already routes to the preferred
-	// IM via deliverAsyncResult. Observed live 2026-07-18: 163 progress rows
-	// for platform "cli" all failed with "no sender for platform cli".
-	if !c.srv.Delivery.SupportsPlatform(req.Platform) {
-		return func() {}
-	}
-	deliver := c.srv.Delivery
-	done := make(chan struct{})
-	start := time.Now()
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				elapsed := time.Since(start).Round(time.Second)
-				content := fmt.Sprintf("SelfMind is still working (%s elapsed). I will send the result here when it finishes.", elapsed)
-				_ = deliver.EnqueueAndTry(context.Background(), delivery.Message{
-					TenantID:       identity.TenantID,
-					PersonID:       identity.PersonID,
-					Platform:       req.Platform,
-					PlatformUserID: identity.PlatformUserID,
-					Channel:        req.Channel,
-					RunID:          runID,
-					Content:        content,
-				})
-			}
-		}
-	}()
-	return func() {
-		close(done)
-	}
-}
-
 func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, resp api.MessageResponse) bool {
 	if providerWaitIsParked(resp) {
 		return true // The durable wakeup owns delivery of the eventual result.
@@ -159,6 +113,22 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		}
 	}
 	return accepted
+}
+
+func (c *RunCoordinator) hasCrossEndpointDeliveryOverride(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, resp api.MessageResponse) bool {
+	if c == nil || c.srv == nil || c.srv.Control == nil || c.srv.Delivery == nil || identity == nil {
+		return false
+	}
+	runID := runIDForResponse(resp)
+	if runID == "" {
+		return false
+	}
+	target, err := c.srv.Control.RunDeliveryOverride(ctx, identity.TenantID, identity.PersonID, runID)
+	if err != nil || target == nil || !c.srv.Delivery.SupportsPlatform(target.Platform) {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(req.Platform), strings.TrimSpace(target.Platform)) ||
+		strings.TrimSpace(req.Channel) != strings.TrimSpace(target.Channel)
 }
 
 // deliverCronResult pushes a scheduled job's result to its channel. Unlike the

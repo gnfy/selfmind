@@ -68,3 +68,27 @@ func TestRunDeliveryOverrideRejectsUnboundOrForeignEndpoint(t *testing.T) {
 		t.Fatal("cli has no push delivery surface")
 	}
 }
+
+func TestRunDeliveryOverrideToBoundPlatformResolvesAliasAndRejectsUnbound(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wx-bound-user", "Bound WeChat"); err != nil {
+		t.Fatal(err)
+	}
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "summary", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "summarize and send to wechat")
+	target, err := store.SetRunDeliveryOverrideToBoundPlatform(ctx, identity.TenantID, identity.PersonID, run.ID, "wechat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Platform != "weixin" || target.PlatformUserID != "wx-bound-user" || target.Channel != "wx-bound-user" {
+		t.Fatalf("unexpected bound target: %+v", target)
+	}
+	if _, err := store.SetRunDeliveryOverrideToBoundPlatform(ctx, identity.TenantID, identity.PersonID, run.ID, "telegram"); err == nil {
+		t.Fatal("unbound telegram platform must be rejected")
+	}
+	if _, err := store.SetRunDeliveryOverrideToBoundPlatform(ctx, identity.TenantID, identity.PersonID, run.ID, "cli"); err == nil {
+		t.Fatal("cli platform must be rejected")
+	}
+}

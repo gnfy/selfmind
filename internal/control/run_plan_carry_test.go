@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -367,15 +368,27 @@ func TestACarriedStepYieldsToACheckThisRunMakesForIt(t *testing.T) {
 	}
 }
 
-// Between plan saves the stored plan still carries the flag; completion and the
-// outcome verdict must read the current check, not fail on the stale carry.
-func TestACarriedStepCheckedAfterTheLastPlanSaveDoesNotBlockCompletion(t *testing.T) {
+// A recheck after close-out starts a new observation cycle. Completion and the
+// outcome verdict then prefer current proof over the old carried observation.
+func TestACarriedStepCheckedAfterCloseReopensBeforeCompletion(t *testing.T) {
 	c := newCarryParent(t, carryShape{required: []bool{true, false}, completed: []int{0}, checked: []int{0}, active: 1})
 	child := c.continueRun(t, c.run, true)
 	if _, err := c.finishAll(t, child); err != nil {
 		t.Fatal(err)
 	}
+	ctx := context.Background()
+	_, err := c.store.ResolveVerificationBinding(ctx, c.identity.TenantID, child.ID, verification.Binding{StepID: c.stepIDs[0]}, "/workspace")
+	var closed interface{ VerificationCycleClosed() bool }
+	if !errors.As(err, &closed) || !closed.VerificationCycleClosed() {
+		t.Fatalf("closed carry accepted a late check: %v", err)
+	}
+	if _, err := c.store.SyncRunPlan(ctx, c.identity.TenantID, child.ID, "reopen for fresh observation", []RunPlanStepInput{{StepID: c.stepIDs[0], Status: "in_progress"}, {StepID: c.stepIDs[1], Status: "completed"}}); err != nil {
+		t.Fatal(err)
+	}
 	c.recheck(t, child, 0, "late-recheck", 900)
+	if _, err := c.finishAll(t, child); err != nil {
+		t.Fatalf("fresh cycle could not close: %v", err)
+	}
 	if err := c.store.ValidateRunCompletion(context.Background(), c.identity.TenantID, child.ID); err != nil {
 		t.Fatalf("a check made after the last plan save blocked completion: %v", err)
 	}

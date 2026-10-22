@@ -227,6 +227,37 @@ func TestDurableDeliveryOverrideSurvivesCoordinatorRestart(t *testing.T) {
 	}
 }
 
+func TestCrossEndpointDeliveryOverrideDetectedForSyncCLIRun(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "summarize today and send to wechat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wx-sync-bound", "WeChat Bound"); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	req := api.MessageRequest{Platform: "cli", Channel: "cli"}
+	resp := api.MessageResponse{Task: task, Run: run, Content: "Today's summary"}
+	if daemon.coordinator().hasCrossEndpointDeliveryOverride(ctx, identity, req, resp) {
+		t.Fatal("should not report cross-endpoint override before set_delivery_target")
+	}
+	if _, err := store.SetRunDeliveryOverrideToBoundPlatform(ctx, identity.TenantID, identity.PersonID, run.ID, "wechat"); err != nil {
+		t.Fatal(err)
+	}
+	if !daemon.coordinator().hasCrossEndpointDeliveryOverride(ctx, identity, req, resp) {
+		t.Fatal("expected cross-endpoint override to be detected for sync CLI run")
+	}
+	if !daemon.coordinator().deliverAsyncResult(ctx, identity, req, resp) {
+		t.Fatal("expected delivery to bound weixin account to be accepted")
+	}
+	if len(recorder.messages) != 1 || recorder.messages[0].Platform != "weixin" || recorder.messages[0].PlatformUserID != "wx-sync-bound" {
+		t.Fatalf("messages=%+v", recorder.messages)
+	}
+}
+
 func TestRecordToolOutputIsLiveOnly(t *testing.T) {
 	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })

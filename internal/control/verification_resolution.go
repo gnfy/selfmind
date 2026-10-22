@@ -37,77 +37,68 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 			Evidence workUnitEvidence `json:"evidence"`
 		}
 		if json.Unmarshal([]byte(raw), &p) != nil || p.Evidence.Kind != "verification" || p.Evidence.Command == nil || !verification.ValidBinding(p.Evidence.Command.Binding) {
-			return nil, fmt.Errorf("reference has no stable verification obligation; inspect the original evidence instead of replacing an unbound historical check")
-		}
-		old := p.Evidence.Command.Binding
-		if b.Criterion == "" {
-			b.Criterion = old.Criterion
-		}
-		if b.Target == "" {
-			b.Target = old.Target
-		}
-		explicitStep := b.StepID != ""
-		if b.StepID == "" {
+			if (p.Evidence.Kind == "command" || p.Evidence.Kind == "observation") && b.StepID != "" {
+				b.Replaces = ""
+			} else if p.Evidence.Kind == "command" || p.Evidence.Kind == "observation" {
+				return nil, fmt.Errorf("reference %q is a %s observation, not a verify check; omit replaces and pass step_id to bind verify to the Plan step", b.Replaces, p.Evidence.Kind)
+			} else {
+				return nil, fmt.Errorf("reference has no stable verification obligation; inspect the original evidence instead of replacing an unbound historical check")
+			}
+		} else if p.Evidence.Command.Binding.StepID != "" &&
+			(b.StepID == "" || b.StepID == p.Evidence.Command.Binding.StepID) &&
+			(b.Criterion == "" || b.Criterion == p.Evidence.Command.Binding.Criterion) &&
+			(b.Target == "" || b.Target == p.Evidence.Command.Binding.Target) &&
+			strings.TrimSpace(cwd) != "" && strings.TrimSpace(p.Evidence.Command.CWD) != "" &&
+			strings.TrimSpace(cwd) != strings.TrimSpace(p.Evidence.Command.CWD) {
+			old := p.Evidence.Command.Binding
 			b.StepID = old.StepID
-		}
-		if b.LocalDependencies == nil {
-			b.LocalDependencies = old.LocalDependencies
-		}
-		// A replacement preserves its obligation unless Main explicitly
-		// selects another server-issued step. Current Plan position is not a
-		// semantic relationship between two checks.
-		b.Version = old.Version
-		// A different current step is valid only when Main explicitly selects it.
-		// Keep the original criterion, target and replacement edge for diagnosis.
-		plan, planErr := s.LatestRunPlan(ctx, tenant, runID)
-		if planErr != nil {
-			return nil, planErr
-		}
-		if plan != nil {
-			oldStepFound := false
-			oldStepCancelled := false
-			oldWorkUnitClosed := false
-			hasOpenStep := false
-			for _, step := range plan.Steps {
-				if step.Status == "in_progress" || step.Status == "pending" {
-					hasOpenStep = true
-				}
-				if step.StepID == old.StepID {
-					oldStepFound = true
-					oldStepCancelled = step.Status == "cancelled"
-				}
+			if b.Criterion == "" {
+				b.Criterion = old.Criterion
 			}
-			if oldStepFound {
-				var status string
-				if queryErr := s.db.QueryRowContext(ctx, `SELECT COALESCE(w.status,'')
-					FROM run_plan_steps p
-					LEFT JOIN run_work_units w ON w.run_id=p.run_id AND w.id=p.work_unit_id
-					WHERE p.tenant_id=? AND p.run_id=?
-					  AND p.plan_version=(SELECT MAX(version) FROM run_plan_versions WHERE tenant_id=? AND run_id=?)
-					  AND p.step_id=? LIMIT 1`, normalizeTenant(tenant), runID,
-					normalizeTenant(tenant), runID, old.StepID).Scan(&status); queryErr != nil {
-					return nil, queryErr
-				}
-				oldWorkUnitClosed = workUnitTerminal(status)
+			if b.Target == "" {
+				b.Target = old.Target
 			}
-			// Frozen historical obligations are not silently reassigned by position.
+			if b.LocalDependencies == nil {
+				b.LocalDependencies = old.LocalDependencies
+			}
+			b.Replaces = ""
+		} else {
+			old := p.Evidence.Command.Binding
+			if b.Criterion == "" {
+				b.Criterion = old.Criterion
+			}
+			if b.Target == "" {
+				b.Target = old.Target
+			}
+
+			if b.StepID == "" {
+				b.StepID = old.StepID
+			}
+			if b.LocalDependencies == nil {
+				b.LocalDependencies = old.LocalDependencies
+			}
+			// A replacement preserves its obligation unless Main explicitly
+			// selects another server-issued step. Current Plan position is not a
+			// semantic relationship between two checks.
+			b.Version = old.Version
+			// A different current step is valid only when Main explicitly selects it.
+			// Keep the original criterion, target and replacement edge for diagnosis.
+			plan, planErr := s.LatestRunPlan(ctx, tenant, runID)
+			if planErr != nil {
+				return nil, planErr
+			}
 			if b.StepID != old.StepID {
-				found := false
-				for _, step := range plan.Steps {
-					found = found || step.StepID == b.StepID
-				}
-				if !found {
-					return nil, fmt.Errorf("verification step %q does not belong to the current Run plan", b.StepID)
-				}
 				b.Version = 3
-			} else if old.StepID != "" && (!oldStepFound || oldStepCancelled || (oldWorkUnitClosed && hasOpenStep && !explicitStep)) {
-				return nil, fmt.Errorf("the original verification obligation is closed or unavailable; select the current step_id explicitly for this recheck")
 			}
+			if err := s.ValidateVerificationReplacement(ctx, tenant, runID, b, cwd); err != nil {
+				return nil, err
+			}
+			if err := s.requireOpenVerificationCycle(ctx, tenant, runID, plan, b.StepID); err != nil {
+				return nil, err
+			}
+
+			return &b, nil
 		}
-		if err := s.ValidateVerificationReplacement(ctx, tenant, runID, b, cwd); err != nil {
-			return nil, err
-		}
-		return &b, nil
 	}
 	explicitStandalone := b.StepID == "" && (b.Criterion != "" || b.Target != "")
 	if explicitStandalone {
@@ -171,6 +162,9 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 		}
 		if selected >= 0 {
 			step := plan.Steps[selected]
+			if err := s.requireOpenVerificationCycle(ctx, tenant, runID, plan, step.StepID); err != nil {
+				return nil, err
+			}
 			if strings.TrimSpace(step.SuccessCriteria) == "" {
 				if b.StepID == "" {
 					return nil, nil
@@ -196,4 +190,44 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 		return nil, fmt.Errorf("verification step %q does not belong to the current Run plan", b.StepID)
 	}
 	return nil, nil
+}
+
+// A closed Work Unit owns a frozen evidence window. New observations must use a
+// deliberately reopened cycle, never extend historical closure by accident.
+type verificationCycleClosedError struct {
+	stepID  string
+	version int
+}
+
+func (e *verificationCycleClosedError) Error() string {
+	return fmt.Sprintf("verification step %q has a closed observation cycle in accepted Plan version %d; use update_plan with mode=patch to reopen this step as pending, preserving the current in_progress step; then run verify with the same step_id", e.stepID, e.version)
+}
+func (*verificationCycleClosedError) VerificationCycleClosed() bool { return true }
+
+func (s *Store) requireOpenVerificationCycle(ctx context.Context, tenant, runID string, plan *RunPlan, stepID string) error {
+	if stepID == "" {
+		return nil
+	} // Explicit standalone checks keep their own identity.
+	if plan != nil {
+		for _, step := range plan.Steps {
+			if step.StepID != stepID {
+				continue
+			}
+			if step.Status == "cancelled" {
+				return fmt.Errorf("verification step %q is cancelled; select a current open step explicitly", stepID)
+			}
+			var status string
+			if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(w.status,'') FROM run_plan_steps p
+				LEFT JOIN run_work_units w ON w.run_id=p.run_id AND w.id=p.work_unit_id
+				WHERE p.tenant_id=? AND p.run_id=? AND p.plan_version=? AND p.step_id=? LIMIT 1`,
+				normalizeTenant(tenant), runID, plan.Version, stepID).Scan(&status); err != nil {
+				return err
+			}
+			if workUnitTerminal(status) {
+				return &verificationCycleClosedError{stepID: stepID, version: plan.Version}
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("verification step %q does not belong to the current Run plan", stepID)
 }

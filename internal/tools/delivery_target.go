@@ -22,7 +22,7 @@ func NewSetDeliveryTargetTool(store *control.Store) *SetDeliveryTargetTool {
 func (t *SetDeliveryTargetTool) Name() string { return "set_delivery_target" }
 
 func (t *SetDeliveryTargetTool) Description() string {
-	return "Move this active run's final result to the endpoint that sent one server-issued live input. Use only when that input explicitly asks to send the final result here; never invent an input_id or endpoint."
+	return "Route this active run's final result to an authenticated bound IM endpoint. Pass input_id when a [SelfMind live user input] asked to send the result there, or pass platform (for example weixin, wechat, telegram, or im) when the user's prompt explicitly asks to send or copy the result to their bound IM account."
 }
 
 func (t *SetDeliveryTargetTool) Schema() ToolSchema {
@@ -31,8 +31,8 @@ func (t *SetDeliveryTargetTool) Schema() ToolSchema {
 		AdditionalProperties: rejectAdditionalProperties(),
 		Properties: map[string]PropertyDef{
 			"input_id": {Type: "string", Description: "Server-issued id from the exact [SelfMind live user input] that explicitly requested final delivery here."},
+			"platform": {Type: "string", Description: "Bound IM platform to receive the final result when explicitly requested by the user (for example weixin, wechat, telegram, or im). Never pass a user id or channel id."},
 		},
-		Required: []string{"input_id"},
 	}
 }
 
@@ -49,10 +49,19 @@ func (t *SetDeliveryTargetTool) Execute(args map[string]interface{}) (string, er
 		return "", fmt.Errorf("authenticated run scope is required")
 	}
 	inputID := strings.TrimSpace(taskStringArg(args, "input_id"))
-	if inputID == "" {
-		return "", fmt.Errorf("input_id is required")
+	platform := strings.TrimSpace(taskStringArg(args, "platform"))
+	if inputID == "" && platform == "" {
+		return "", fmt.Errorf("input_id or platform is required")
 	}
-	target, err := t.store.SetRunDeliveryOverrideFromSteering(ContextFromArgs(args), scope.ControlTenantID, scope.PersonID, scope.RunID, inputID)
+	var (
+		target *control.RunDeliveryTarget
+		err    error
+	)
+	if inputID != "" {
+		target, err = t.store.SetRunDeliveryOverrideFromSteering(ContextFromArgs(args), scope.ControlTenantID, scope.PersonID, scope.RunID, inputID)
+	} else {
+		target, err = t.store.SetRunDeliveryOverrideToBoundPlatform(ContextFromArgs(args), scope.ControlTenantID, scope.PersonID, scope.RunID, platform)
+	}
 	if err != nil {
 		return "", err
 	}

@@ -165,6 +165,8 @@ func TestObservationCredentialSafePlumbingDoesNotDisqualifyReads(t *testing.T) {
 		"cd /w && kubectl get pods -n platform -o json | jq -r '.items[].metadata.name'",
 		"which gcloud && gcloud config get-value account",
 		"test -d /w && cd /w && aws iam list-roles",
+		"set -euo pipefail; kubectl config get-contexts; kubectl get deploy -n app",
+		`CTX="prod"; NS="app"; for d in api web; do kubectl --context "$CTX" -n "$NS" get deploy "$d"; done`,
 	} {
 		if !provenReadOnlyWithCredentials(t, command) {
 			t.Errorf("credentialed read must survive its plumbing: %s", command)
@@ -183,6 +185,8 @@ func TestObservationCredentialSafeExcludesEveryFileReader(t *testing.T) {
 		// `set` and `export` carry no file access but print the whole variable
 		// environment when given no operands.
 		"set; gcloud builds list",
+		"set -o; gcloud builds list",
+		"set -- secret; gcloud builds list",
 		"export; aws iam list-roles",
 	} {
 		if provenReadOnlyWithCredentials(t, command) {

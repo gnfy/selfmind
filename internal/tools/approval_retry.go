@@ -23,7 +23,7 @@ type approvalJudgeResult struct {
 // reviewApproval shares one deadline, including retries inside a transport.
 // Each attempt has its own result channel: a late, context-ignoring provider
 // cannot replace a later decision. Nothing here retries an execution tool.
-func reviewApproval(ctx context.Context, judge ApprovalJudge, prompt string, firstLimit time.Duration, current func() bool) (out approvalJudgeResult) {
+func reviewApproval(ctx context.Context, judge ApprovalJudge, prompt string, firstLimit time.Duration, current func() bool, requireStructured ...bool) (out approvalJudgeResult) {
 	started := time.Now()
 	var attempts []ApprovalAttemptMetadata
 	var usage *llm.UsageStats
@@ -37,6 +37,11 @@ func reviewApproval(ctx context.Context, judge ApprovalJudge, prompt string, fir
 		out.response.UsageIncomplete = usageIncomplete
 		if usageIncomplete && usage != nil {
 			usage.CacheUsageReported, usage.CacheCreationReported = false, false
+		}
+		var responseErr *ApprovalResponseError
+		if errors.As(out.err, &responseErr) {
+			out.response.ProtocolStatus = responseErr.Class
+			responseErr.Metadata = out.response
 		}
 	}()
 	for n := 0; n < 2; n++ {
@@ -89,6 +94,13 @@ func reviewApproval(ctx context.Context, judge ApprovalJudge, prompt string, fir
 		if out.err == nil && strings.TrimSpace(out.reply) == "" {
 			out.err = &ApprovalResponseError{Class: "empty_output", Metadata: out.response}
 		}
+		if out.err == nil && len(requireStructured) > 0 && requireStructured[0] {
+			if protocolErr := validateStructuredTriageReply(out.reply); protocolErr != nil {
+				out.response.ProtocolStatus = protocolErr.Class
+				protocolErr.Metadata = out.response
+				out.err = protocolErr
+			}
+		}
 		status := out.response.ProtocolStatus
 		if out.err != nil {
 			status = approvalRetryErrorClass(out.err)
@@ -124,6 +136,9 @@ func reviewApproval(ctx context.Context, judge ApprovalJudge, prompt string, fir
 		if out.err == nil || !retryableApprovalFailure(out.err) {
 			return
 		}
+		if status == "invalid_json" || status == "incomplete_decision" {
+			prompt += "\n\nIMPORTANT: Your previous response was not a valid or complete JSON object. Reply ONLY with a single valid JSON object containing outcome, risk_level, user_authorization, and rationale."
+		}
 	}
 	return
 }
@@ -134,7 +149,7 @@ func retryableApprovalFailure(err error) bool {
 	}
 	var responseErr *ApprovalResponseError
 	if errors.As(err, &responseErr) {
-		return responseErr.Class == "empty_output"
+		return responseErr.Class == "empty_output" || responseErr.Class == "invalid_json" || responseErr.Class == "incomplete_decision"
 	}
 	if info, ok := llm.ProviderErrorInfo(err); ok {
 		stop := llm.ClassifyStopReason(info.StopReason)

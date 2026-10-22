@@ -360,7 +360,7 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 			}
 		}
 		m.program.Send(MsgClarifyRequest{ID: id, Question: event.Content, Choices: clarifyChoicesFromPayload(event.Payload), Channel: ref.Channel, RunID: ref.RunID})
-	case "clarify.expired":
+	case "clarify.answered", "clarify.expired":
 		if id, _ := event.Payload["clarify_id"].(string); strings.TrimSpace(id) != "" {
 			m.program.Send(MsgClarifyResolved{ID: strings.TrimSpace(id), Event: ref})
 		}

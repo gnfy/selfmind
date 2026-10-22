@@ -2,6 +2,7 @@ package verification
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -241,5 +242,26 @@ func TestDeduplicateRedundantSucceededChecksCoversSubsetAndSummaryChecks(t *test
 	}
 	if !p.ReviewComplete || len(p.Blockers) != 0 {
 		t.Fatalf("expected ReviewComplete with 0 blockers, got ReviewComplete=%v Blockers=%+v", p.ReviewComplete, p.Blockers)
+	}
+}
+
+func TestUnusableObservationCausesAreTypedAndBounded(t *testing.T) {
+	var checks []Check
+	var assessments []Assessment
+	for i := 0; i < 12; i++ {
+		id := fmt.Sprintf("check-%d", i)
+		step := fmt.Sprintf("step-%d", i)
+		checks = append(checks, observedAssessmentCheck(id, step, "target", 0))
+		assessments = append(assessments, Assessment{Result: "met", EvidenceRefs: []string{id}, Reason: "Observed"})
+	}
+	_, err := ProjectAssessments("run", assessments, checks, []Mutation{{Path: "/workspace/report", FinishedAt: 20}}, nil)
+	var issues *EvidenceIssuesError
+	if !errors.As(err, &issues) || len(issues.Issues) != 8 || issues.Omitted != 4 {
+		t.Fatalf("lost bounded cause: %+v %v", issues, err)
+	}
+	for _, issue := range issues.Issues {
+		if issue.Kind != "stale" || issue.StepID == "" || issue.CWD != "/workspace" {
+			t.Fatalf("lost provenance: %+v", issue)
+		}
 	}
 }

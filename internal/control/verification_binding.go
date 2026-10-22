@@ -67,7 +67,7 @@ func (s *Store) ValidateVerificationReplacement(ctx context.Context, tenant, run
 	old := verification.Check{ToolCallID: e.ToolCallID, Binding: e.Command.Binding, CWD: e.Command.CWD, StartedAt: e.StartedAt, FinishedAt: e.FinishedAt}
 	next := verification.Check{Binding: &b, CWD: cwd, StartedAt: time.Now().UnixNano()}
 	if mismatch := verification.ReplacementMismatch(old, next); mismatch != "" {
-		return fmt.Errorf("verification replacement must preserve the recorded criterion, target and working directory: %s; original criterion=%q target=%q cwd=%q", mismatch, bindingCriterion(old.Binding), bindingTarget(old.Binding), old.CWD)
+		return fmt.Errorf("verification replacement must preserve the recorded criterion, target and working directory: %s; original criterion=%q target=%q cwd=%q (to run in a different working directory for a Plan step, pass step_id without replaces)", mismatch, bindingCriterion(old.Binding), bindingTarget(old.Binding), old.CWD)
 	}
 	return nil
 }

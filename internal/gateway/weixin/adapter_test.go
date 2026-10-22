@@ -659,3 +659,56 @@ func TestAdapterDoesNotResendDurablyEnqueuedChoice(t *testing.T) {
 		t.Fatalf("adapter duplicated the outbox-owned notice: %q", sent)
 	}
 }
+
+func TestAdapterAdvancesCursorWhenImmediateReplySendFails(t *testing.T) {
+	var dispatched []string
+	var mu sync.Mutex
+	var cursors []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/" + epGetUpdates:
+			cursor := stringFromMap(payload, "get_updates_buf")
+			cursors = append(cursors, cursor)
+			if cursor != "" {
+				_, _ = w.Write([]byte(`{"ret":0,"errcode":0,"msgs":[],"get_updates_buf":"` + cursor + `"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ret":0,"errcode":0,"get_updates_buf":"cursor-after-batch","msgs":[` +
+				`{"msg_id":"m1","from_user_id":"wx-user","to_user_id":"wx-account","item_list":[{"type":1,"text_item":{"text":"/help"}}]},` +
+				`{"msg_id":"m2","from_user_id":"wx-user","to_user_id":"wx-account","item_list":[{"type":1,"text_item":{"text":"run task"}}]}]}`))
+		case "/" + epSendMessage:
+			_, _ = w.Write([]byte(`{"ret":-8,"errmsg":"transient outbound error"}`))
+		default:
+			_, _ = w.Write([]byte(`{"ret":0,"errcode":0}`))
+		}
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(RuntimeConfig{
+		Enabled: true, AccountID: "wx-account", Token: "token", BaseURL: server.URL,
+		CDNBaseURL: server.URL, DMPolicy: "open", GroupPolicy: "disabled", HomeDir: t.TempDir(), SendChunkRetries: 0,
+	}, func(_ context.Context, inbound api.DurableInbound) (api.MessageResponse, int, error) {
+		mu.Lock()
+		dispatched = append(dispatched, inbound.MessageID)
+		mu.Unlock()
+		if inbound.MessageID == "m1" {
+			return api.MessageResponse{Content: "help text"}, http.StatusOK, nil
+		}
+		return api.MessageResponse{Accepted: true}, http.StatusOK, nil
+	})
+	adapter.retryDelay = time.Millisecond
+	runPollLoopUntil(t, adapter, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return countContaining(cursors, "cursor-after-batch") > 0
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dispatched) != 2 || dispatched[0] != "m1" || dispatched[1] != "m2" {
+		t.Fatalf("dispatched = %v; outbound send failure after admission must not abort batch or retain cursor", dispatched)
+	}
+}

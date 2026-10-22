@@ -91,7 +91,7 @@ type planFlowDaemon struct {
 	ws     *control.Workspace
 }
 
-func newPlanFlowDaemon(t *testing.T, provider llm.Provider) planFlowDaemon {
+func newPlanFlowDaemon(t *testing.T, provider llm.Provider, extra ...tools.Tool) planFlowDaemon {
 	t.Helper()
 	store := controltest.NewStore(t)
 	registry := tools.NewRegistry()
@@ -101,7 +101,13 @@ func newPlanFlowDaemon(t *testing.T, provider llm.Provider) planFlowDaemon {
 	dispatcher.RegisterTool(tools.NewBatchReadTool(dispatcher.Dispatch, dispatcher.ToolExecutionMetadata))
 	dispatcher.RegisterTool(tools.NewUpdatePlanTool())
 	dispatcher.RegisterTool(tools.NewFinishRunTool())
+	for _, tool := range extra {
+		dispatcher.RegisterTool(tool)
+	}
 	dispatcher.InjectMiddleware(tools.WorkspaceScopeMiddleware())
+	if len(extra) > 0 {
+		dispatcher.InjectResultMiddleware(tools.ExternalEffectClaimMiddleware(store))
+	}
 	agent := kernel.NewAgent(memory.NewMemoryManager(nil), dispatcher, provider, "test", 8, 1, nil)
 	daemon := &Server{Control: store, Gateway: router.NewGateway(agent, nil), ExecutionRuntime: newTestExecutionRuntime(t), DefaultTenantID: "default"}
 	owner, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "local", "Local")

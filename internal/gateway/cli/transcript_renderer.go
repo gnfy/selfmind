@@ -130,7 +130,7 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		modelName = "active"
 	}
 	providerName := strings.TrimSpace(m.providerName)
-	version := strings.TrimSpace(buildinfo.Version)
+	version := strings.TrimSpace(buildinfo.Display())
 	if version == "" {
 		version = "dev"
 	}

@@ -36,6 +36,13 @@ func EvidenceMiddleware() ResultMiddleware {
 				var err error
 				binding, err = prepareVerificationBinding(args)
 				if err != nil {
+					var preparation interface {
+						ToolFailurePhase() string
+						ToolEffectState() string
+					}
+					if errors.As(err, &preparation) && preparation.ToolFailurePhase() == "preparation" && preparation.ToolEffectState() == "not_dispatched" {
+						return kernel.ToolDispatchResult{Invoked: new(bool)}, err
+					}
 					return kernel.ToolDispatchResult{Invoked: new(bool)}, newStableToolRecoveryError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use step_id for a Plan check, or replaces and reason for a corrected attempt; omitted condition fields are inherited from that reference.", "preparation", "corrected_input", "not_dispatched", false)
 				}
 			}
@@ -125,7 +132,7 @@ func EvidenceMiddleware() ResultMiddleware {
 			if evidence.Command != nil && evidence.Command.Binding != nil {
 				result.Output += "\nVerification evidence: " + evidence.ToolCallID
 				if err != nil && strings.TrimSpace(binding.StepID) != "" {
-					result.Output += "\nThis attempt did not prove the condition for step " + binding.StepID + "."
+					result.Output += "\nThis attempt did not prove the condition for step " + binding.StepID + ". To correct the observation method, re-run verify with replaces=" + evidence.ToolCallID + " and reason (omit criterion and target to inherit the recorded binding)."
 				}
 				if err == nil && strings.TrimSpace(binding.Replaces) != "" && strings.TrimSpace(binding.StepID) != "" {
 					result.Output += "\nThis check replaces " + binding.Replaces + " for step " + binding.StepID + "; its acceptance condition is unchanged."

@@ -139,7 +139,21 @@ func (s *Store) applyRunCompletionTx(ctx context.Context, tx *sql.Tx, candidate 
 	}
 	condition, err := resolveConditionAssessmentsTx(ctx, tx, candidate.tenant, candidate.runID, candidate.input.Assessments)
 	if err != nil {
-		return verification.AssessmentProjection{}, err
+		if candidate.input.Status != "done" {
+			var kept []verification.Assessment
+			for _, a := range candidate.input.Assessments {
+				if _, singleErr := resolveConditionAssessmentsTx(ctx, tx, candidate.tenant, candidate.runID, []verification.Assessment{a}); singleErr == nil {
+					kept = append(kept, a)
+				}
+			}
+			if len(kept) < len(candidate.input.Assessments) {
+				candidate.input.Assessments = kept
+				condition, err = resolveConditionAssessmentsTx(ctx, tx, candidate.tenant, candidate.runID, candidate.input.Assessments)
+			}
+		}
+		if err != nil {
+			return verification.AssessmentProjection{}, err
+		}
 	}
 	if candidate.input.Status == "done" {
 		if err = completionVerificationDeferrals(finalProjection); err != nil {

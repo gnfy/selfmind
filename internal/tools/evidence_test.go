@@ -156,7 +156,8 @@ func TestFailedBoundVerificationExplainsThatTheSameObligationRemainsOpen(t *test
 	if err == nil {
 		t.Fatal("failed verification unexpectedly succeeded")
 	}
-	if !strings.Contains(result.Output, "did not prove the condition for step step-required") {
+	if !strings.Contains(result.Output, "did not prove the condition for step step-required") ||
+		!strings.Contains(result.Output, "replaces=failed-check and reason (omit criterion and target to inherit the recorded binding)") {
 		t.Fatalf("missing condition result: %q", result.Output)
 	}
 	evidence := readEvidenceEvent(t, events)

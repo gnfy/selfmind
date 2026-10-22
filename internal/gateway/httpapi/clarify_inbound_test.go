@@ -811,3 +811,83 @@ func TestExactReplyEdgeAnswersAnOldQuestionAndNamesIt(t *testing.T) {
 		t.Fatalf("recorded = %+v", current)
 	}
 }
+
+func TestClarifyOptionOrdinalAndParkedWorkSelectionComposition(t *testing.T) {
+	daemon, store, identity, task, origin := newClarifyTestServer(t)
+	ctx := context.Background()
+
+	_, err := store.SyncRunPlan(ctx, identity.TenantID, origin.ID, "init", []control.RunPlanStepInput{
+		{Step: "Inspect config", Status: "completed"},
+		{Step: "Deploy selected region", Status: "pending"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clarify, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		TaskID:   task.ID,
+		RunID:    origin.ID,
+		Question: "Which region should we deploy to?",
+		Options:  []byte(`["us-east-1","eu-west-1"]`),
+		Channel:  "session-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, origin.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+
+	interactionTask, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Reply turn", Channel: "session-b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interactionRun, err := store.StartRun(ctx, interactionTask, "session-b", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hints := daemon.coordinator().workContinuityHints(ctx, identity, interactionRun, "session-b", 3)
+	var found bool
+	for _, h := range hints {
+		if h.RunID == origin.ID {
+			found = true
+			if h.PendingClarifyID != clarify.ID || h.PendingQuestion != clarify.Question {
+				t.Fatalf("expected pending clarify metadata on hint, got %+v", h)
+			}
+			if len(h.PendingChoices) != 2 || h.PendingChoices[1] != "eu-west-1" {
+				t.Fatalf("expected pending choices on hint, got %+v", h.PendingChoices)
+			}
+			if h.CurrentStep != "Deploy selected region" {
+				t.Fatalf("expected first pending step fallback on hint, got %q", h.CurrentStep)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected origin run %s in continuity hints, got %+v", origin.ID, hints)
+	}
+
+	if _, err := store.AppendEvent(ctx, control.Event{
+		TaskID:     interactionTask.ID,
+		RunID:      interactionRun.ID,
+		Type:       "work.selection",
+		Visibility: "task",
+		Payload:    mustJSON(map[string]any{"action": "resume", "run_id": origin.ID, "task_id": task.ID, "clarify_id": clarify.ID, "answer": "eu-west-1", "summary": "User selected option 2 (eu-west-1)"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sel, err := daemon.coordinator().commitWorkSelection(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "session-b", Content: "2",
+	}, interactionTask, interactionRun)
+	if err != nil || sel == nil || sel.QueueID == "" {
+		t.Fatalf("expected queued continuation from parked work selection, got %+v err=%v", sel, err)
+	}
+	answered, err := store.GetClarifyRequest(ctx, identity.TenantID, clarify.ID)
+	if err != nil || answered == nil || answered.Status != "answered" || answered.Answer != "eu-west-1" {
+		t.Fatalf("expected clarify answered via work selection, got %+v err=%v", answered, err)
+	}
+}

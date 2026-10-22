@@ -32,14 +32,14 @@ func TestExecSandboxPromptNote(t *testing.T) {
 
 	withExecSandboxPolicy(t, true, false, true)
 	note := ExecSandboxPromptNote()
-	if !strings.Contains(note, "daemon host namespace") || !strings.Contains(note, "proxy settings are projected") {
-		t.Fatalf("networked sandbox note must state shared network, got %q", note)
+	if !strings.Contains(note, "daemon host namespace") || !strings.Contains(note, "proxy settings are projected") || !strings.Contains(note, "$SELFMIND_RUN_TMP") {
+		t.Fatalf("networked sandbox note must state shared network and temp dir, got %q", note)
 	}
 
 	withExecSandboxPolicy(t, true, false, false)
 	note = ExecSandboxPromptNote()
-	if !strings.Contains(note, "network is disabled by default") || !strings.Contains(note, "network:shared") || !strings.Contains(note, "exclusively holds") {
-		t.Fatalf("network-less sandbox note must describe the narrow capability, got %q", note)
+	if !strings.Contains(note, "network is disabled by default") || !strings.Contains(note, "network:shared") || !strings.Contains(note, "exclusively holds") || !strings.Contains(note, "$SELFMIND_RUN_TMP") {
+		t.Fatalf("network-less sandbox note must describe the narrow capability and temp dir, got %q", note)
 	}
 }
 

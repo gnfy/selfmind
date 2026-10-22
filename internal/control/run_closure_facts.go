@@ -10,9 +10,15 @@ import (
 // RunPlanSnapshot is one read transaction over the accepted Plan and its
 // applicable evidence. Preview failure never erases an accepted Plan.
 type RunPlanSnapshot struct {
-	Plan         *RunPlan
-	ClosureFacts verification.ClosureFacts
-	factsErr     error
+	Plan           *RunPlan
+	ClosureFacts   verification.ClosureFacts
+	factsErr       error
+	checks         []verification.Check
+	citeable       []verification.CiteableEvidence
+	cycles         map[string]bool
+	executable     bool
+	pendingEffects bool
+	recoveryRead   bool
 }
 
 // ReadRunPlanSnapshot scopes current execution state to the exact person/Run.
@@ -21,20 +27,29 @@ func (s *Store) ReadRunPlanSnapshot(ctx context.Context, tenant, person, runID s
 	if person == "" {
 		return RunPlanSnapshot{}, sql.ErrNoRows
 	}
-	return s.readRunPlanSnapshot(ctx, tenant, person, runID)
+	return s.readRunPlanSnapshot(ctx, tenant, person, runID, false)
+}
+
+// ReadRunRecoverySnapshot adds cycle and unresolved-effect facts only for a
+// failed completion. Ordinary context reads keep their existing query cost.
+func (s *Store) ReadRunRecoverySnapshot(ctx context.Context, tenant, person, runID string) (RunPlanSnapshot, error) {
+	if person == "" {
+		return RunPlanSnapshot{}, sql.ErrNoRows
+	}
+	return s.readRunPlanSnapshot(ctx, tenant, person, runID, true)
 }
 
 // RunClosureFacts retains the strict preview API used by accepted update
 // receipts. Snapshot consumers may still display the Plan when only facts fail.
 func (s *Store) RunClosureFacts(ctx context.Context, tenant, runID string) (verification.ClosureFacts, error) {
-	snapshot, err := s.readRunPlanSnapshot(ctx, tenant, "", runID)
+	snapshot, err := s.readRunPlanSnapshot(ctx, tenant, "", runID, false)
 	if err != nil {
 		return verification.ClosureFacts{}, err
 	}
 	return snapshot.ClosureFacts, snapshot.factsErr
 }
 
-func (s *Store) readRunPlanSnapshot(ctx context.Context, tenant, person, runID string) (RunPlanSnapshot, error) {
+func (s *Store) readRunPlanSnapshot(ctx context.Context, tenant, person, runID string, recovery bool) (RunPlanSnapshot, error) {
 	var snapshot RunPlanSnapshot
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -42,8 +57,9 @@ func (s *Store) readRunPlanSnapshot(ctx context.Context, tenant, person, runID s
 	}
 	defer tx.Rollback()
 	tenant = normalizeTenant(tenant)
-	var owner string
-	if err := tx.QueryRowContext(ctx, `SELECT person_id FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).Scan(&owner); err != nil {
+	var owner, status string
+	var cancelled bool
+	if err := tx.QueryRowContext(ctx, `SELECT person_id,status,COALESCE(cancel_requested,0) FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).Scan(&owner, &status, &cancelled); err != nil {
 		return snapshot, err
 	}
 	if person != "" && person != owner {
@@ -53,7 +69,24 @@ func (s *Store) readRunPlanSnapshot(ctx context.Context, tenant, person, runID s
 	if err != nil {
 		return RunPlanSnapshot{}, err
 	}
-	snapshot.ClosureFacts, snapshot.factsErr = runClosureFactsTx(ctx, tx, tenant, runID, snapshot.Plan)
+	snapshot.executable = status == "running" && !cancelled
+	var mutations []verification.Mutation
+	snapshot.checks, mutations, _, snapshot.factsErr = conditionEvidenceTx(ctx, tx, tenant, runID, snapshot.Plan)
+	if snapshot.factsErr == nil {
+		snapshot.citeable, snapshot.factsErr = verification.CiteableChecks(snapshot.checks, mutations)
+	}
+	if snapshot.factsErr == nil {
+		snapshot.ClosureFacts = runClosureFacts(snapshot.Plan, snapshot.citeable)
+	}
+	if recovery && snapshot.factsErr == nil {
+		snapshot.cycles, snapshot.factsErr = runStepCyclesTx(ctx, tx, tenant, runID, snapshot.Plan)
+	}
+	if recovery && snapshot.factsErr == nil {
+		effects, effectErr := runRelevantExternalEffects(ctx, tx, s.instance, tenant, owner, runID)
+		snapshot.pendingEffects = len(effects) > 0
+		snapshot.factsErr = effectErr
+	}
+	snapshot.recoveryRead = recovery && snapshot.factsErr == nil
 	if snapshot.factsErr != nil {
 		snapshot.ClosureFacts = verification.ClosureFacts{Available: false}
 	}
@@ -63,16 +96,8 @@ func (s *Store) readRunPlanSnapshot(ctx context.Context, tenant, person, runID s
 	return snapshot, nil
 }
 
-func runClosureFactsTx(ctx context.Context, tx *sql.Tx, tenant, runID string, plan *RunPlan) (verification.ClosureFacts, error) {
+func runClosureFacts(plan *RunPlan, evidence []verification.CiteableEvidence) verification.ClosureFacts {
 	out := verification.ClosureFacts{Evidence: []verification.CiteableEvidence{}}
-	checks, mutations, _, err := conditionEvidenceTx(ctx, tx, tenant, runID, plan)
-	if err != nil {
-		return out, err
-	}
-	evidence, err := verification.CiteableChecks(checks, mutations)
-	if err != nil {
-		return out, err
-	}
 	if plan != nil {
 		out.PlanVersion = plan.Version
 		for _, step := range plan.Steps {
@@ -99,5 +124,5 @@ func runClosureFactsTx(ctx context.Context, tx *sql.Tx, tenant, runID string, pl
 		out.Evidence = append(out.Evidence, item)
 	}
 	out.Available = true
-	return out, nil
+	return out
 }

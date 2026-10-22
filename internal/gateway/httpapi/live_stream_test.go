@@ -190,6 +190,14 @@ func TestForeignSessionReceivesOnlyProjectedRunFacts(t *testing.T) {
 	<-own.ch
 	<-attached.ch
 
+	hub.publish(api.RunEvent{PersonID: "person", Channel: "session-a", Type: "clarify.answered",
+		Payload: []byte(`{"clarify_id":"clarify-a","answer":"private answer details"}`)})
+	if got := string((<-other.ch).Payload); !strings.Contains(got, "clarify-a") || strings.Contains(got, "private answer details") {
+		t.Fatalf("foreign answered resolution lost identity or leaked answer: %s", got)
+	}
+	<-own.ch
+	<-attached.ch
+
 	hub.publish(api.RunEvent{PersonID: "person", Channel: "session-a", Type: "clarify.expired",
 		Payload: []byte(`{"clarify_id":"clarify-a","reason":"private cancellation details"}`)})
 	if got := string((<-other.ch).Payload); !strings.Contains(got, "clarify-a") || strings.Contains(got, "private cancellation details") {

@@ -34,7 +34,7 @@ var personWideRunEventTypes = map[string]bool{
 	"run.cancelled": true, "run.interrupted": true, "run.failed": true,
 	"approval.requested": true, "approval.approved": true, "approval.rejected": true,
 	"approval.expired": true, "approval.archived": true, "approval.parked": true,
-	"clarify.requested": true, "clarify.expired": true,
+	"clarify.requested": true, "clarify.answered": true, "clarify.expired": true,
 	"background.notice": true, "external_watch.completed": true,
 }
 
@@ -109,7 +109,7 @@ func (s *runEventSubscriber) view(event api.RunEvent) (api.RunEvent, bool) {
 		copyField("clarify_id")
 		// A generated question may quote the private input of this run.
 		summary["question"], _ = json.Marshal("A question is waiting")
-	case "clarify.expired":
+	case "clarify.answered", "clarify.expired":
 		copyField("clarify_id")
 	case "background.notice":
 		copyShortField("message", 160)

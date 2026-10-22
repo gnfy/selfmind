@@ -40,4 +40,12 @@ func TestSetDeliveryTargetUsesServerIssuedLiveInput(t *testing.T) {
 	}); err == nil {
 		t.Fatal("invented input id must not select a destination")
 	}
+	boundResult, err := NewSetDeliveryTargetTool(store).Execute(map[string]interface{}{
+		"platform":          "wechat",
+		"_context":          ctx,
+		"_invocation_scope": kernel.ToolInvocationScope{ControlTenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID},
+	})
+	if err != nil || !strings.Contains(boundResult, `"platform":"weixin"`) || !strings.Contains(boundResult, `"channel":"wx-bound"`) {
+		t.Fatalf("boundResult=%s err=%v", boundResult, err)
+	}
 }

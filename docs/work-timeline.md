@@ -220,7 +220,9 @@ must not block foreground work and cannot grant execution authority.
 For an otherwise new user-originated turn, the selector also places at most
 three same-channel-first Attention cards in `TaskRuntimeContext`. These cards
 contain bounded structured Run state, including historical changed paths and
-reported risks from that exact Run's handoff, never transcripts or tool output.
+reported risks from that exact Run's handoff, the current `in_progress` step
+(or first `pending` step when parked between steps), and any pending
+`clarify_id`, question, and numbered choices, never transcripts or tool output.
 These references neither assert current file contents nor activate old Skills. They
 make a short reply discoverable by the normal Main call even when
 `semantic_recall` deliberately skips short text; they remain hints, and Main
@@ -336,7 +338,15 @@ daemon-origin gate: task text only, a command is refused
   queue; one pre-effect correction re-points that claim
   (`RetargetInteractionContinuation`). A workspace, execution-root, or
   checkpoint mismatch creates a correctly scoped transfer child at
-  finalization, because a Run's execution domain never changes in place.
+  finalization, because a Run's execution domain never changes in place. A
+  target Run with a pending `clarify_requests` row cannot be claimed in place
+  without answering the question: `work_select(resume)` requires `answer`
+  (returning the pending `clarify_id`, question, and numbered choices if
+  omitted without claiming or expiring the question), resolves bare 1-based
+  option ordinals against `options_json` across all surfaces, and commits the
+  clarification answer and exact-parent continuation queue row in one
+  transaction at gateway commit time (`AnswerClarifyRequestWithResume`). `work_inspect`
+  also surfaces `pending_clarification` and question/answer event summaries.
 - Repeating an identical `update_plan` after a verification precondition fails
   remains blocked until the accepted Plan version or a successful check bound
   to one of its current steps changes. The retry guard uses that durable

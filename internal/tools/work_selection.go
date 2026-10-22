@@ -30,7 +30,7 @@ func NewWorkSelectTool(store *control.Store) *WorkSelectTool {
 func (t *WorkSelectTool) Name() string { return "work_select" }
 
 func (t *WorkSelectTool) Description() string {
-	return "Propose how the current request relates to one exact inspected historical run. Use observe for a read-only status/result question, or resume to continue that work. A same-domain resume is claimed immediately and returns its context. A scope/checkpoint mismatch proposes a transfer for gateway validation; it is not queued yet. A material effect in this interaction blocks implicit continuation. Only a committed claim or queue receipt proves that work will continue."
+	return "Propose how the current request relates to one exact inspected historical run. Use observe for a read-only status/result question, or resume to continue that work. When the target run has a pending clarification and the user's message answers it, pass clarify_id (optional) and answer so the gateway atomically commits the answer and continuation; selection without an answer will not claim or expire a parked question. A same-domain resume without a checkpoint wait is claimed immediately and returns its context. A scope/checkpoint/clarification wait proposes a transfer for gateway validation; it is not queued yet. A material effect in this interaction blocks implicit continuation. Only a committed claim or queue receipt proves that work will continue."
 }
 
 func (t *WorkSelectTool) Schema() ToolSchema {
@@ -38,8 +38,10 @@ func (t *WorkSelectTool) Schema() ToolSchema {
 		Type:                 "object",
 		AdditionalProperties: rejectAdditionalProperties(),
 		Properties: map[string]PropertyDef{
-			"action": {Type: "string", Enum: []string{"observe", "resume"}, Description: "observe reads/reports prior state; resume continues that work, directly in this turn when the execution domain matches."},
-			"run_id": {Type: "string", Description: "Exact run_id already supported by work_search/work_inspect evidence."},
+			"action":     {Type: "string", Enum: []string{"observe", "resume"}, Description: "observe reads/reports prior state; resume continues that work, directly in this turn when the execution domain matches."},
+			"run_id":     {Type: "string", Description: "Exact run_id already supported by work_search/work_inspect evidence."},
+			"clarify_id": {Type: "string", Description: "Optional pending clarification ID on the target run when the user's message answers that question."},
+			"answer":     {Type: "string", Description: "Required when action is resume on a run with a pending clarification: the user's answer or selected option (1-based option number or text)."},
 		},
 		Required: []string{"action", "run_id"},
 	}
@@ -93,6 +95,11 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 	if target == nil || target.PersonID != scope.PersonID {
 		return "", fmt.Errorf("target run is unavailable for the current person")
 	}
+	clarifyID := strings.TrimSpace(taskStringArg(args, "clarify_id"))
+	answer := strings.TrimSpace(taskStringArg(args, "answer"))
+	if action == "observe" && (clarifyID != "" || answer != "") {
+		return "", fmt.Errorf("clarify_id and answer are only valid when action is resume")
+	}
 	if action == "resume" {
 		resumable, candidates, err := runIsResumable(ctx, t.store, scope.ControlTenantID, scope.PersonID, target)
 		if err != nil {
@@ -100,6 +107,33 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 		}
 		if !resumable {
 			return "", notResumableRun(target, candidates)
+		}
+		pendingClarify, err := t.store.PendingClarifyForRun(ctx, scope.ControlTenantID, scope.PersonID, target.ID)
+		if err != nil {
+			return "", err
+		}
+		if pendingClarify != nil {
+			if clarifyID != "" && clarifyID != pendingClarify.ID {
+				return "", fmt.Errorf("run %s is waiting on clarification %s, not %s", target.ID, pendingClarify.ID, clarifyID)
+			}
+			if answer == "" {
+				var choiceSuffix string
+				if choices := control.ClarifyChoices(pendingClarify.Options); len(choices) > 0 {
+					numbered := make([]string, 0, len(choices))
+					for i, choice := range choices {
+						numbered = append(numbered, fmt.Sprintf("%d. %s", i+1, choice))
+					}
+					choiceSuffix = " [" + strings.Join(numbered, "; ") + "]"
+				}
+				return "", fmt.Errorf("run %s is waiting on pending clarification %s (%q%s); selection alone cannot claim or expire a parked question. If the user's message answers this question, call work_select with action=\"resume\", run_id=%q, clarify_id=%q, and answer set to their reply (or option number/text); otherwise use action=\"observe\" or continue as new work so the pending question remains actionable",
+					target.ID, pendingClarify.ID, pendingClarify.Question, choiceSuffix, target.ID, pendingClarify.ID)
+			}
+			clarifyID = pendingClarify.ID
+			answer = control.ResolveClarifyOption(answer, pendingClarify.Options)
+		} else if clarifyID != "" {
+			return "", fmt.Errorf("run %s has no pending clarification %s", target.ID, clarifyID)
+		} else {
+			answer = ""
 		}
 	}
 	raw, err := t.store.RunWorkSelection(ctx, scope.ControlTenantID, scope.PersonID, scope.RunID)
@@ -110,15 +144,18 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 	repeated := false
 	if len(raw) > 0 {
 		var existing struct {
-			Action string `json:"action"`
-			RunID  string `json:"run_id"`
+			Action    string `json:"action"`
+			RunID     string `json:"run_id"`
+			ClarifyID string `json:"clarify_id"`
+			Answer    string `json:"answer"`
 		}
 		if json.Unmarshal(raw, &existing) != nil {
 			return "", fmt.Errorf("the existing work selection audit is invalid")
 		}
 		previousAction = strings.ToLower(strings.TrimSpace(existing.Action))
 		previousRunID = strings.TrimSpace(existing.RunID)
-		repeated = previousAction == action && previousRunID == targetRunID
+		repeated = previousAction == action && previousRunID == targetRunID &&
+			strings.TrimSpace(existing.ClarifyID) == clarifyID && strings.TrimSpace(existing.Answer) == answer
 	}
 	if previousRunID != "" && !repeated {
 		blocked, reason, err := t.store.RunSelectionEffectBoundary(ctx, scope.ControlTenantID, scope.PersonID, scope.RunID)
@@ -134,6 +171,10 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 		payload := map[string]interface{}{
 			"action": action, "run_id": targetRunID, "task_id": target.TaskID,
 			"target_workspace_id": target.WorkspaceID,
+		}
+		if clarifyID != "" {
+			payload["clarify_id"] = clarifyID
+			payload["answer"] = answer
 		}
 		if previousRunID != "" {
 			status = "corrected"

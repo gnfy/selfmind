@@ -1,0 +1,67 @@
+id: finished_turn_releases_capacity
+title: "unfinished turns retain their state without occupying execution capacity"
+suite: reliability
+workspace: isolated
+model_required: false
+runtime:
+  max_active_work_runs: 1
+  workers: 1
+setup:
+  task:
+    title: "Historical unfinished work"
+    parked_runs:
+      - input: "Waiting for the person"
+        status: waiting_user
+      - input: "Waiting for an external observation"
+        status: waiting_external
+        wait_reason: capacity
+      - input: "Previous execution was interrupted"
+        status: interrupted
+      - input: "Verification is incomplete"
+        status: verification_partial
+      - input: "An earlier attempt was blocked"
+        status: blocked
+turns:
+  - input: "Inspect a separate local example"
+    platform: cli
+    channel: fresh-session
+    hold_worker: true
+    assert_state:
+      - on: runs
+        status: running
+        count_gte: 1
+        count_lte: 1
+  - input: "/stop"
+    platform: cli
+    channel: fresh-session
+    turn_run_ordinal: 1
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 60
+assert_state:
+  - on: worker_leases
+    count_gte: 1
+    count_lte: 1
+  - on: runs
+    status: waiting_user
+    count_gte: 1
+  - on: runs
+    status: waiting_external
+    count_gte: 1
+  - on: runs
+    status: interrupted
+    count_gte: 1
+  - on: runs
+    status: verification_partial
+    count_gte: 1
+  - on: runs
+    status: blocked
+    count_gte: 1
+  - on: runs
+    status: cancelled
+    count_gte: 1
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

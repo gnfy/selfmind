@@ -313,6 +313,20 @@ func (t *WorkInspectTool) Execute(args map[string]interface{}) (string, error) {
 	if run.FinishedAt != nil {
 		result["finished_at"] = run.FinishedAt.UTC().Format(time.RFC3339)
 	}
+	if pendingClarify, err := t.store.PendingClarifyForRun(ctx, scope.ControlTenantID, scope.PersonID, run.ID); err != nil {
+		return "", err
+	} else if pendingClarify != nil {
+		result["pending_clarification"] = map[string]interface{}{
+			"clarify_id": pendingClarify.ID,
+			"question":   workBound(pendingClarify.Question, 400),
+			"choices":    boundedWorkStrings(control.ClarifyChoices(pendingClarify.Options), 8, 160),
+			"channel":    pendingClarify.Channel,
+		}
+		if run.ID != scope.RunID {
+			result["selection_notice"] = fmt.Sprintf("%s This run has pending clarification %s (%q); if the user's message answers it, pass clarify_id=%q and answer to work_select with action resume. Selection without an answer will not claim or expire a parked question.",
+				result["selection_notice"], pendingClarify.ID, workBound(pendingClarify.Question, 160), pendingClarify.ID)
+		}
+	}
 	if err := t.inspectPlanPage(ctx, scope.ControlTenantID, run, intArg(args, "plan_offset", 0), result); err != nil {
 		return "", err
 	}
@@ -378,6 +392,12 @@ func summarizeWorkEvent(event control.Event) workEventSummary {
 	summary.Status = workBound(stringValue(payload["status"]), 80)
 	summary.Reason = workBound(stringValue(payload["reason"]), 240)
 	summary.Summary = workBound(stringValue(payload["summary"]), 400)
+	if summary.Summary == "" {
+		summary.Summary = workBound(stringValue(payload["question"]), 400)
+	}
+	if summary.Summary == "" {
+		summary.Summary = workBound(stringValue(payload["answer"]), 400)
+	}
 	if outcome, ok := payload["outcome"].(map[string]interface{}); ok {
 		if summary.Status == "" {
 			summary.Status = workBound(stringValue(outcome["status"]), 80)

@@ -522,7 +522,12 @@ mistaken for one request exceeding the displayed context capacity.
   Foreign questions retain their exact question and Run identities. Finishing
   unrelated work never withdraws a question, parking its Run keeps it pending,
   and exact resolution or settlement of its own Run clears only that wait.
-  Only the requesting session restores the interactive panel. Startup hydration
+  Only the requesting session restores the interactive panel. When the asking
+  CLI session's foreground Run finishes in `waiting_user`, its active clarify
+  handle (`clarifyReq`, numbered choices, and explicit `ClarifyID` edge) stays
+  armed so the next non-command reply answers that exact question directly
+  while slash commands still execute as commands; starting a new owned Run or
+  resolving the question from another surface clears the handle. Startup hydration
   still records foreign approvals when there is no transcript digest to print,
   transient notice expiry restores pending human waits, and resolution withdraws
   the live notice. Stored titles are flattened to one

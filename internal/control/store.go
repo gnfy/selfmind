@@ -2431,7 +2431,7 @@ type StartRunOptions struct {
 	// admission. Empty is ordinary work; callers cannot invent other classes.
 	ExecutionClass string
 	ExecutionRoots []executionenv.RootBinding
-	// MaxActiveRuns is the per-person top-level admission ceiling. A positive
+	// MaxActiveRuns limits executing Runs, not unfinished work or Attention. A positive
 	// value is checked inside the Run insertion transaction; zero preserves
 	// callers that do not participate in gateway admission.
 	MaxActiveRuns int
@@ -2576,10 +2576,8 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		limit = 1
 	}
 	if limit > 0 {
-		var active int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND person_id = ? AND status = 'running' AND execution_class = ?`,
-			run.TenantID, run.PersonID, run.ExecutionClass).Scan(&active); err != nil {
+		active, err := countActiveRuns(ctx, tx, run.TenantID, run.PersonID, run.ExecutionClass, "")
+		if err != nil {
 			return nil, fmt.Errorf("check run capacity: %w", err)
 		}
 		if active >= limit {
@@ -2587,10 +2585,8 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		}
 	}
 	if options.ExclusiveChannel {
-		var sameChannel int
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND person_id = ? AND channel = ? AND status = 'running' AND execution_class = 'work'`,
-			run.TenantID, run.PersonID, run.Channel).Scan(&sameChannel); err != nil {
+		sameChannel, err := countActiveRuns(ctx, tx, run.TenantID, run.PersonID, "work", run.Channel)
+		if err != nil {
 			return nil, fmt.Errorf("check run channel lane: %w", err)
 		}
 		if sameChannel > 0 {

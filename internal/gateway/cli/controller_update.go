@@ -615,10 +615,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !newerDaemonRun {
 			m.daemonRunAwaitingDone = false
 			m.daemonRunOwned = false
-			m.clarifyMode = false
-			m.clarifyGateway = false
-			m.clarifyChoices = nil
-			m.clarifyReq = tools.ClarifyRequest{}
+			if !(msg.Err == nil && (msg.Turn == nil || replyOutcomeStatus(msg.Turn) == "waiting_user") && m.clarifyGateway && m.clarifyMode) {
+				m.clarifyMode = false
+				m.clarifyGateway = false
+				m.clarifyChoices = nil
+				m.clarifyReq = tools.ClarifyRequest{}
+			}
 		}
 		// The mid-turn guidance notice is stale once the run ends — clear it.
 		if strings.HasPrefix(m.statusMsg, "Sent to the running task") || strings.Contains(m.statusMsg, "Guidance queue") {
@@ -634,7 +636,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer)
 			m.addErrorMessage(fmt.Sprintf("Error: %v", msg.Err))
 		} else if m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer) {
-			m.runStatus = replyOutcomeStatus(msg.Turn)
+			if m.clarifyGateway && m.clarifyMode {
+				m.runStatus = "waiting_user"
+			} else {
+				m.runStatus = replyOutcomeStatus(msg.Turn)
+			}
 			if strings.TrimSpace(msg.Input) != "" && !strings.HasPrefix(strings.TrimSpace(msg.Input), "/") {
 				m.completeFirstOnboardingTask()
 			}
@@ -687,6 +693,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runTokens = 0
 		m.lastRequestTokens = 0
 		m.clearActivePlan()
+		if m.daemonRunOwned {
+			m.clarifyMode = false
+			m.clarifyGateway = false
+			m.clarifyChoices = nil
+			m.clarifyReq = tools.ClarifyRequest{}
+		}
 		if !localMatch {
 			m.stopModelWait()
 			m.thinking = false
@@ -771,6 +783,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolExecuting = ""
 		m.clearActivePlan()
 		m.finalizeOpenToolMessages("Completion was not observed before the run ended.")
+		if uiStatusForDaemonOutcome(msg.Status) != "waiting_user" {
+			m.clarifyMode = false
+			m.clarifyGateway = false
+			m.clarifyChoices = nil
+			m.clarifyReq = tools.ClarifyRequest{}
+		}
 		if strings.TrimSpace(msg.FinalAnswer) != "" {
 			m.finalizeLiveStream(msg.FinalAnswer, llm.AssistantPhaseFinalAnswer)
 		} else if m.processState().HasStreamContent() {
@@ -1235,7 +1253,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.inputHistoryStore.Append(submission.PersistentText)
 			}
 
-			if m.clarifyMode {
+			if m.clarifyMode && !command.LooksLikeCommand(input) {
 				response := m.resolveClarifyResponse(input)
 				m.addMessage("user", response)
 				if m.clarifyGateway {

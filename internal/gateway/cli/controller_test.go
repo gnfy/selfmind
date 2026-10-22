@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
+	"selfmind/internal/buildinfo"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/modelchange"
@@ -1096,6 +1097,23 @@ func TestOnboardingStartupCardShowsModelPairWorkspaceAndFirstTask(t *testing.T) 
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("startup card missing %q:\n%s", expected, rendered)
 		}
+	}
+}
+
+func TestStartupCardDisplaysBuildVersionCommitAndTimestamp(t *testing.T) {
+	oldVersion, oldCommit, oldBuiltAt := buildinfo.Version, buildinfo.Commit, buildinfo.BuiltAt
+	t.Cleanup(func() {
+		buildinfo.Version, buildinfo.Commit, buildinfo.BuiltAt = oldVersion, oldCommit, oldBuiltAt
+	})
+	buildinfo.Version = "v0.1.0-beta.29"
+	buildinfo.Commit = "ff239ace0f161d236eceef87761a74e1536511fa"
+	buildinfo.BuiltAt = "2026-10-21T15:00:00Z"
+
+	controller := NewController("codex-cli", "gpt-primary", nil, "")
+	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(100), "\n"))
+	want := ">_ SelfMind  v0.1.0-beta.29 (ff239ace0f16, built 2026-10-21T15:00:00Z)"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("startup card missing build display %q:\n%s", want, rendered)
 	}
 }
 

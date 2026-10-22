@@ -272,3 +272,61 @@ func TestApprovalRetryUsesOneBoundedBudget(t *testing.T) {
 		t.Fatalf("unbounded review deadlines: %v", deadlines)
 	}
 }
+
+func TestApprovalStructuredJSONExtractionAndSingleRetryRecovery(t *testing.T) {
+	t.Run("extracts valid JSON after wrapper braces in one attempt", func(t *testing.T) {
+		j := &retryJudge{call: func(_ context.Context, _ int) (ApprovalResponse, error) {
+			return ApprovalResponse{Content: "<think>evaluating {target} safety</think>\n```json\n{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"Read-only inspection.\"}\n```"}, nil
+		}}
+		v, a, err := triageApprovalWithIntent(context.Background(), j, "terminal", "inspect", "review", RunIntentSnapshot{ModelAuthorization: true, RawUserText: "Inspect workspace."})
+		if err != nil || v != TriageApprove || j.calls.Load() != 1 || len(a.Response.Attempts) != 1 || a.Response.ProtocolStatus != "valid_decision" {
+			t.Fatalf("unexpected extraction result: calls=%d verdict=%v response=%+v err=%v", j.calls.Load(), v, a.Response, err)
+		}
+	})
+
+	for _, firstReply := range []struct {
+		name   string
+		reply  string
+		status string
+	}{
+		{"invalid_json", "I think we should approve this request.", "invalid_json"},
+		{"incomplete_decision", `{"outcome":"approve"}`, "incomplete_decision"},
+	} {
+		t.Run(firstReply.name, func(t *testing.T) {
+			var secondPrompt string
+			j := &retryJudge{call: func(_ context.Context, n int) (ApprovalResponse, error) {
+				if n == 1 {
+					return ApprovalResponse{Content: firstReply.reply, ApprovalResponseMetadata: ApprovalResponseMetadata{OutputTokens: 32}}, nil
+				}
+				return ApprovalResponse{Content: `{"outcome":"approve","risk_level":"low","user_authorization":"high","rationale":"Authorized inspection."}`, ApprovalResponseMetadata: ApprovalResponseMetadata{OutputTokens: 48}}, nil
+			}}
+			v, a, err := triageApprovalWithIntent(context.Background(), promptCapturingJudge{retryJudge: j, onPrompt: func(n int, p string) {
+				if n == 2 {
+					secondPrompt = p
+				}
+			}}, "terminal", "inspect", "review", RunIntentSnapshot{ModelAuthorization: true, RawUserText: "Inspect workspace."})
+			if err != nil || v != TriageApprove || j.calls.Load() != 2 || len(a.Response.Attempts) != 2 {
+				t.Fatalf("expected retry recovery: calls=%d verdict=%v attempts=%+v err=%v", j.calls.Load(), v, a.Response.Attempts, err)
+			}
+			if a.Response.Attempts[0].ProtocolStatus != firstReply.status || a.Response.ProtocolStatus != "valid_decision" || a.Response.OutputTokens != 80 {
+				t.Fatalf("unexpected attempt metadata: %+v", a.Response)
+			}
+			if !strings.Contains(secondPrompt, "Reply ONLY with a single valid JSON object") {
+				t.Fatalf("expected strict JSON retry reminder on second attempt, got %q", secondPrompt)
+			}
+		})
+	}
+}
+
+type promptCapturingJudge struct {
+	*retryJudge
+	onPrompt func(int, string)
+}
+
+func (j promptCapturingJudge) JudgeResponse(ctx context.Context, prompt string) (ApprovalResponse, error) {
+	n := int(j.calls.Add(1))
+	if j.onPrompt != nil {
+		j.onPrompt(n, prompt)
+	}
+	return j.call(ctx, n)
+}

@@ -102,7 +102,7 @@ var observationRules = []observationRule{
 	{program: "git", verify: gitObservationArgs, prefixes: [][]string{{"status"}, {"diff"}, {"log"}, {"show"}, {"rev-parse"}, {"rev-list"}, {"grep"}, {"merge-base"}, {"ls-files"}, {"ls-tree"}, {"cat-file"}, {"describe"}, {"remote", "get-url"}, {"ls-remote"}}},
 	{program: "gcloud", external: true, credentialSafe: true, prefixes: [][]string{{"auth", "list"}, {"builds", "list"}, {"builds", "describe"}, {"builds", "triggers", "list"}, {"builds", "triggers", "describe"}, {"run", "services", "list"}, {"run", "services", "describe"}, {"container", "clusters", "list"}, {"container", "clusters", "describe"}, {"projects", "list"}, {"projects", "describe"}, {"projects", "get-iam-policy"}, {"config", "list"}, {"config", "get-value"}, {"artifacts", "repositories", "list"}, {"artifacts", "docker", "images", "list"}, {"artifacts", "docker", "tags", "list"}, {"artifacts", "docker", "versions", "list"}}},
 	{program: "aws", external: true, credentialSafe: true, targetValueFlags: []string{"--ids", "--stack-name"}, prefixes: [][]string{{"sts", "get-caller-identity"}, {"codebuild", "batch-get-builds"}, {"codebuild", "batch-get-projects"}, {"codebuild", "list-builds"}, {"codebuild", "list-builds-for-project"}, {"codepipeline", "get-pipeline-execution"}, {"codepipeline", "list-pipeline-executions"}, {"iam", "get-role"}, {"iam", "get-role-policy"}, {"iam", "get-policy"}, {"iam", "get-policy-version"}, {"iam", "list-roles"}, {"iam", "list-policies"}, {"iam", "list-role-policies"}, {"iam", "list-attached-role-policies"}, {"iam", "simulate-principal-policy"}, {"kms", "describe-key"}, {"kms", "get-key-policy"}, {"kms", "list-keys"}, {"kms", "list-aliases"}, {"ssm", "describe-parameters"}, {"logs", "get-log-events"}}},
-	{program: "kubectl", external: true, credentialSafe: true, prefixes: [][]string{{"get"}, {"describe"}, {"diff"}, {"logs"}, {"version"}, {"cluster-info"}, {"auth", "can-i"}}, reject: []string{"secret", "secrets", "--raw"}, readsState: kubectlReadsState},
+	{program: "kubectl", external: true, credentialSafe: true, prefixes: [][]string{{"get"}, {"describe"}, {"diff"}, {"logs"}, {"version"}, {"cluster-info"}, {"auth", "can-i"}, {"config", "get-contexts"}, {"config", "current-context"}, {"config", "get-clusters"}}, reject: []string{"secret", "secrets", "--raw"}, readsState: kubectlReadsState},
 	{program: "helm", external: true, credentialSafe: true, prefixes: [][]string{{"list"}, {"status"}, {"history"}, {"show"}, {"search"}, {"template"}, {"lint"}, {"env"}, {"version"}}, readsState: helmReadsState},
 	// `gh api` defaults to GET but can perform every method through the same
 	// subcommand, so the verb decides whether this is an observation. A
@@ -152,7 +152,7 @@ func deterministicObservationExec(toolName string, args map[string]interface{}) 
 		// credentialSafe is per program; filterReadsOnlyStdin judges the
 		// invocation, releasing a filter that provably opened no file. It only
 		// widens, and fails closed on anything it cannot parse.
-		if !ok || (credentialed && !rule.credentialSafe && !filterReadsOnlyStdin(program, fields[1:])) {
+		if !ok || (credentialed && !rule.credentialSafe && !filterReadsOnlyStdin(program, fields[1:]) && !(program == "set" && credentialSafeSet(fields[1:]))) {
 			return false
 		}
 		commandArgs, ok := observationCommandArgs(program, fields[1:])
@@ -210,6 +210,61 @@ func credentialSafeJQ(args []string) bool {
 		filterSeen = true
 	}
 	return filterSeen
+}
+
+// credentialSafeSet allows shell option-setting invocations such as `set -e`,
+// `set -u`, `set -o pipefail`, or `set -euo pipefail` in credentialed
+// observations while keeping bare `set` or `set -o` / `set +o` (which dump
+// shell variables or option state) and positional assignments (`set -- ...`)
+// gated.
+func credentialSafeSet(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if len(arg) < 2 || (arg[0] != '-' && arg[0] != '+') || arg == "--" || arg == "++" {
+			return false
+		}
+		for j := 1; j < len(arg); j++ {
+			ch := arg[j]
+			if ch == 'o' {
+				opt := ""
+				if j+1 < len(arg) {
+					opt = arg[j+1:]
+					j = len(arg)
+				} else {
+					if i+1 >= len(args) {
+						return false
+					}
+					i++
+					opt = strings.TrimSpace(args[i])
+				}
+				if !safeShellSetOption(opt) {
+					return false
+				}
+				continue
+			}
+			switch ch {
+			case 'e', 'u', 'f', 'n', 'C', 'E', 'H', 'P', 'T', 'B', 'h', 'm', 'b':
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func safeShellSetOption(opt string) bool {
+	switch strings.ToLower(strings.TrimSpace(opt)) {
+	case "errexit", "nounset", "pipefail", "noglob", "noexec",
+		"noclobber", "errtrace", "functrace", "physical", "posix", "notify",
+		"braceexpand", "hashall", "histexpand", "history", "ignoreeof", "interactive-comments",
+		"monitor", "onecmd":
+		return true
+	default:
+		return false
+	}
 }
 
 var observationGlobalValueFlags = map[string]map[string]struct{}{

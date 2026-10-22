@@ -103,7 +103,7 @@ func observationStmtCommands(stmt *syntax.Stmt, depth int, bindings map[string]s
 		}
 		return append(left, right...), true
 	case *syntax.ForClause:
-		if !loopObservesIterator(cmd) {
+		if !loopObservesIteratorWithBindings(cmd, bindings) {
 			return nil, false
 		}
 		iter, ok := cmd.Loop.(*syntax.WordIter)
@@ -354,11 +354,14 @@ func recordObservationBindings(assigns []*syntax.Assign, bindings map[string]str
 
 func resolveObservationParam(param *syntax.ParamExp, bindings map[string]string) (string, bool) {
 	if len(bindings) == 0 || param == nil || param.Excl || param.Length || param.Width ||
-		param.Index != nil || param.Slice != nil || param.Repl != nil || param.Exp != nil || param.Param == nil {
+		param.Index != nil || param.Slice != nil || param.Repl != nil || param.Param == nil {
 		return "", false
 	}
-	val, ok := bindings[param.Param.Value]
-	return val, ok
+	if param.Exp == nil {
+		val, ok := bindings[param.Param.Value]
+		return val, ok
+	}
+	return fanoutLiteral(&syntax.Word{Parts: []syntax.WordPart{param}}, bindings)
 }
 
 func unsafeObservationVarName(name string) bool {

@@ -157,6 +157,16 @@ func TestEventToStreamMapping(t *testing.T) {
 			},
 		},
 		{
+			name:    "clarify answered keeps exact identity",
+			ev:      control.Event{ID: "6a", Type: "clarify.answered", Payload: mustJSON(map[string]any{"clarify_id": "clar_123", "answer": "a.go"})},
+			wantTyp: "clarify.answered",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.Payload["clarify_id"] != "clar_123" {
+					t.Fatalf("clarify answered resolution lost identity: %+v", se)
+				}
+			},
+		},
+		{
 			name:    "clarify expiration keeps exact identity",
 			ev:      control.Event{ID: "6b", Type: "clarify.expired", Payload: mustJSON(map[string]any{"clarify_id": "clar_123"})},
 			wantTyp: "clarify.expired",

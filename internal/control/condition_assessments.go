@@ -13,6 +13,12 @@ import (
 type conditionAssessmentInputError struct{ error }
 
 func (*conditionAssessmentInputError) ConditionAssessmentInput() bool { return true }
+func (e *conditionAssessmentInputError) Unwrap() error                { return e.error }
+
+type conditionAssessmentEvidenceError struct{ error }
+
+func (*conditionAssessmentEvidenceError) CompletionPrecondition() bool { return true }
+func (e *conditionAssessmentEvidenceError) Unwrap() error              { return e.error }
 
 // ResolveConditionAssessments shares the Plan's evidence windows and dependency
 // rules. It performs no write; finish_run stores the accepted judgment with its
@@ -104,6 +110,10 @@ func resolveConditionAssessmentsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 	prepared, err := verification.ProjectAssessments(runID, input, checks, mutations, requirements)
 	if err != nil {
 		explainUnavailableEvidence(ctx, tx, tenant, runID, err)
+		var issues *verification.EvidenceIssuesError
+		if errors.As(err, &issues) {
+			return prepared, &conditionAssessmentEvidenceError{err}
+		}
 		return prepared, &conditionAssessmentInputError{err}
 	}
 	// New findings replace only the same obligation. An unrelated successful
@@ -131,6 +141,11 @@ func resolveConditionAssessmentsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 	projected, err := verification.ProjectAssessments(runID, merged, checks, mutations, requirements)
 	if err != nil {
 		explainUnavailableEvidence(ctx, tx, tenant, runID, err)
+		var issues *verification.EvidenceIssuesError
+		var unavailable *verification.EvidenceUnavailableError
+		if errors.As(err, &issues) || errors.As(err, &unavailable) {
+			return projected, &conditionAssessmentEvidenceError{err}
+		}
 		return projected, &completionPreconditionError{err.Error()}
 	}
 	for _, blocker := range prepared.Blockers {

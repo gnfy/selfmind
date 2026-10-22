@@ -78,3 +78,46 @@ func TestConcurrentRunCapacityAdmissionSingleWinner(t *testing.T) {
 		t.Fatalf("other CLI session could not fill second person slot: %v", err)
 	}
 }
+
+// Unfinished work remains actionable without holding execution capacity.
+func TestFinishedTurnReleasesCapacityWithoutRewritingHistory(t *testing.T) {
+	for _, state := range []string{"waiting_user", "waiting_external", "blocked", "verification_partial", "interrupted", "failed", "done", "cancelled"} {
+		t.Run(state, func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			i, task, parent := humanWaitRun(t, s, "unfinished work")
+			ask := pendingClarification(t, s, i, task, parent)
+			if err := s.FinishRun(ctx, i.TenantID, parent.ID, state); err != nil {
+				t.Fatal(err)
+			}
+			before, err := s.GetRun(ctx, i.TenantID, parent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := s.CreateTask(ctx, TaskCreate{TenantID: i.TenantID, PersonID: i.PersonID, Title: "unrelated work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			options := StartRunOptions{MaxActiveRuns: 1, ExclusiveChannel: true}
+			next, err := s.StartRunWithOptions(ctx, other, "cli", "new request", options)
+			if err != nil {
+				t.Fatalf("ended %s turn blocked a new request: %v", state, err)
+			}
+			after, err := s.GetRun(ctx, i.TenantID, parent.ID)
+			if err != nil || after.Status != before.Status || after.ResumesRunID != before.ResumesRunID {
+				t.Fatalf("new request rewrote old work: %+v %v", after, err)
+			}
+			pending, err := s.GetClarifyRequest(ctx, i.TenantID, ask.ID)
+			if err != nil || pending.Status != "pending" {
+				t.Fatalf("unrelated request consumed human wait: %+v %v", pending, err)
+			}
+			options.ResumesRunID = parent.ID
+			if _, err := s.StartRunWithOptions(ctx, task, "cli", "late exact continuation", options); !errors.Is(err, ErrRunCapacity) {
+				t.Fatalf("continuation bypassed executing work: %v", err)
+			}
+			if err := s.FinishRun(ctx, i.TenantID, next.ID, "done"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

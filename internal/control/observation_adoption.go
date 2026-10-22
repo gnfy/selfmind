@@ -83,13 +83,97 @@ func adoptCompletionObservationsTx(ctx context.Context, tx *sql.Tx, tenant, pers
 		step.WorkUnitID = unitID
 		steps[step.StepID] = step
 	}
-	for _, finding := range findings {
-		step, exists := steps[finding.StepID]
-		if !exists || len(finding.EvidenceRefs) == 0 {
+	var lastCursor int64
+	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(cursor),0) FROM task_events WHERE run_id=?`, runID).Scan(&lastCursor)
+	mutations, _, _ := workUnitVerificationChecksTx(ctx, tx, runID, 0, lastCursor)
+	for i := range findings {
+		finding := &findings[i]
+		if len(finding.EvidenceRefs) == 0 {
 			continue
 		}
 		if len(finding.EvidenceRefs) > 8 {
 			return &conditionAssessmentInputError{fmt.Errorf("a finding needs at most 8 observation references")}
+		}
+		step, exists := steps[finding.StepID]
+		if !exists {
+			if finding.StepID == "" && len(findings) > 1 && len(steps) > 0 {
+				var verRefs []string
+				var nonVerObs int
+				for _, ref := range finding.EvidenceRefs {
+					var cursor int64
+					var kind string
+					if err := tx.QueryRowContext(ctx, `SELECT cursor,COALESCE(json_extract(payload_json,'$.evidence.kind'),'') FROM task_events WHERE run_id=? AND type='evidence.recorded' AND json_extract(payload_json,'$.evidence.tool_call_id')=? ORDER BY cursor DESC LIMIT 1`, runID, ref).Scan(&cursor, &kind); err == nil {
+						if kind == "verification" {
+							verRefs = append(verRefs, ref)
+						} else if kind == "command" || kind == "observation" {
+							nonVerObs++
+						}
+					}
+				}
+				if len(verRefs) > 0 && nonVerObs > 0 {
+					finding.EvidenceRefs = verRefs
+				} else if len(verRefs) == 0 && nonVerObs == len(finding.EvidenceRefs) {
+					hasStepPeer := false
+					for j, peer := range findings {
+						if j != i && peer.Result == "met" && (peer.StepID != "" || len(peer.EvidenceRefs) > 0) {
+							hasStepPeer = true
+							break
+						}
+					}
+					if hasStepPeer {
+						finding.EvidenceRefs = nil
+					}
+				}
+			}
+			continue
+		}
+		hasVerifyCheck, err := runStepHasCheckTx(ctx, tx, runID, step.StepID)
+		if err != nil {
+			return err
+		}
+		var hasVerificationRef bool
+		var keptRefs []string
+		for _, ref := range finding.EvidenceRefs {
+			var cursor int64
+			var kind string
+			err := tx.QueryRowContext(ctx, `SELECT cursor,COALESCE(json_extract(payload_json,'$.evidence.kind'),'') FROM task_events WHERE run_id=? AND type='evidence.recorded' AND json_extract(payload_json,'$.evidence.tool_call_id')=? ORDER BY cursor DESC LIMIT 1`, runID, ref).Scan(&cursor, &kind)
+			if kind == "verification" {
+				hasVerificationRef = true
+				keptRefs = append(keptRefs, ref)
+			} else if errors.Is(err, sql.ErrNoRows) {
+				keptRefs = append(keptRefs, ref)
+			}
+		}
+		if (hasVerifyCheck || step.ReusePriorVerification || hasVerificationRef) && len(keptRefs) > 0 {
+			finding.EvidenceRefs = keptRefs
+			continue
+		}
+		if len(finding.EvidenceRefs) > 1 {
+			start, end, err := workUnitEvidenceWindowTx(ctx, tx, runID, step.WorkUnitID)
+			if err == nil {
+				var freshRefs []string
+				for _, ref := range finding.EvidenceRefs {
+					var cursor int64
+					var kind string
+					if err := tx.QueryRowContext(ctx, `SELECT cursor,COALESCE(json_extract(payload_json,'$.evidence.kind'),'') FROM task_events WHERE run_id=? AND type='evidence.recorded' AND json_extract(payload_json,'$.evidence.tool_call_id')=? ORDER BY cursor DESC LIMIT 1`, runID, ref).Scan(&cursor, &kind); err != nil || kind == "verification" || cursor <= start || cursor > end {
+						continue
+					}
+					adoption := observationAdoption{Version: 2, SourceCursor: cursor, SourceCallID: ref, StepID: step.StepID, Criterion: step.SuccessCriteria}
+					check, err := observationCheckTx(ctx, tx, runID, adoption)
+					if err != nil {
+						continue
+					}
+					if step.VerificationRequired && finding.Result == "met" && (check.Observation.Kind == "file" || check.Status != "succeeded" || check.ExitCode != 0) {
+						continue
+					}
+					if check.StartedAt >= verification.RelevantMutationAt(check, mutations) {
+						freshRefs = append(freshRefs, ref)
+					}
+				}
+				if len(freshRefs) > 0 && len(freshRefs) < len(finding.EvidenceRefs) {
+					finding.EvidenceRefs = freshRefs
+				}
+			}
 		}
 		for _, ref := range finding.EvidenceRefs {
 			var cursor int64

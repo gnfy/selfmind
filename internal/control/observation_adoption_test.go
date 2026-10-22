@@ -253,3 +253,120 @@ func TestFileObservationAssociationVersionsKeepRecordedTargets(t *testing.T) {
 		}
 	}
 }
+
+func TestCompletionSkipsAuxiliaryObservationsOnVerifiedStepsAndNarrowsMixedFreshObservations(t *testing.T) {
+	ctx := context.Background()
+	s, owner, task, run := newRecoveryFixture(t)
+	plan, err := s.SyncRunPlan(ctx, owner.TenantID, run.ID, "two steps", []RunPlanStepInput{
+		{Step: "Inspect target", Status: "completed", SuccessCriteria: "Target file inspected", VerificationRequired: false},
+		{Step: "Verify target", Status: "in_progress", SuccessCriteria: "Tests pass", VerificationRequired: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step1 := plan.Plan.Steps[0].StepID
+	step2 := plan.Plan.Steps[1].StepID
+
+	// Record a terminal command (toolcall-1-0) and a fresh read_file (toolcall-2-0) before a mutation to unrelated.go.
+	zero := 0
+	rawTerm, _ := json.Marshal(map[string]interface{}{
+		"evidence": map[string]interface{}{
+			"version": 1, "tool_call_id": "toolcall-1-0", "tool_name": "terminal", "kind": "command",
+			"status": "succeeded", "invoked": true, "started_at_unix_nano": 10, "finished_at_unix_nano": 15,
+			"command": map[string]interface{}{"command": "git status", "cwd": "/workspace"},
+			"process": map[string]interface{}{"started": true, "exit_code": &zero},
+		},
+	})
+	if _, err := s.AppendEvent(ctx, Event{RunID: run.ID, TaskID: task.ID, Type: "evidence.recorded", Payload: rawTerm}); err != nil {
+		t.Fatal(err)
+	}
+	deps := []string{"/workspace/inspected.go"}
+	rawRead, _ := json.Marshal(map[string]interface{}{
+		"evidence": map[string]interface{}{
+			"version": 1, "tool_call_id": "toolcall-2-0", "tool_name": "read_file", "kind": "observation",
+			"status": "succeeded", "invoked": true, "started_at_unix_nano": 16, "finished_at_unix_nano": 18,
+			"observation": verification.Observation{
+				Kind:                      "file",
+				Target:                    "/workspace/inspected.go",
+				CWD:                       "/workspace",
+				LocalDependencies:         &deps,
+				ResolvedLocalDependencies: deps,
+			},
+		},
+	})
+	if _, err := s.AppendEvent(ctx, Event{RunID: run.ID, TaskID: task.ID, Type: "evidence.recorded", Payload: rawRead}); err != nil {
+		t.Fatal(err)
+	}
+	// Record a mutation to /workspace/other.go at t=25 (making toolcall-1-0 stale because terminal has nil LocalDependencies, while toolcall-2-0 stays fresh).
+	rawMut := []byte(`{"evidence":{"tool_call_id":"toolcall-3-0","tool_name":"write_file","kind":"mutation","status":"succeeded","started_at_unix_nano":20,"finished_at_unix_nano":25,"files":[{"path":"/workspace/other.go","operation":"write","before_sha256":"old","after_sha256":"new"}]}}`)
+	if _, err := s.AppendEvent(ctx, Event{RunID: run.ID, TaskID: task.ID, Type: "evidence.recorded", Payload: rawMut}); err != nil {
+		t.Fatal(err)
+	}
+
+	// ResolveVerificationBinding when replaces points to an observation (toolcall-1-0) with explicit step_id binds cleanly to step2.
+	resolved, err := s.ResolveVerificationBinding(ctx, owner.TenantID, run.ID, verification.Binding{
+		StepID:            step2,
+		Replaces:          "toolcall-1-0",
+		Reason:            "run verify on step2",
+		LocalDependencies: &deps,
+	}, "/workspace")
+	if err != nil || resolved == nil || resolved.StepID != step2 || resolved.Replaces != "" {
+		t.Fatalf("expected replaces on non-verify observation with explicit step_id to bind to step2, got %+v / %v", resolved, err)
+	}
+
+	// Record a passing verify check (toolcall-10-0) on step2 at t=30..35.
+	resolved.ResolvedLocalDependencies = deps
+	rawVerify, _ := json.Marshal(map[string]interface{}{
+		"evidence": map[string]interface{}{
+			"version": 1, "tool_call_id": "toolcall-10-0", "tool_name": "verify", "kind": "verification",
+			"status": "succeeded", "invoked": true, "started_at_unix_nano": 30, "finished_at_unix_nano": 35,
+			"command": map[string]interface{}{"command": "go test ./...", "cwd": "/workspace", "binding": resolved},
+			"process": map[string]interface{}{"started": true, "exit_code": &zero},
+		},
+	})
+	if _, err := s.AppendEvent(ctx, Event{RunID: run.ID, TaskID: task.ID, Type: "evidence.recorded", Payload: rawVerify}); err != nil {
+		t.Fatal(err)
+	}
+
+	// ResolveVerificationBinding when replaces points to a Plan-step check (toolcall-10-0) without step_id and cwd changes inherits step2 cleanly.
+	resolvedDifferentCWD, err := s.ResolveVerificationBinding(ctx, owner.TenantID, run.ID, verification.Binding{
+		Replaces: "toolcall-10-0",
+		Reason:   "re-run step2 from repo subdirectory",
+	}, "/workspace/sub")
+	if err != nil || resolvedDifferentCWD == nil || resolvedDifferentCWD.StepID != step2 || resolvedDifferentCWD.Replaces != "" {
+		t.Fatalf("expected replaces on Plan-step check with omitted step_id and changed cwd to inherit step2, got %+v / %v", resolvedDifferentCWD, err)
+	}
+
+	// PrepareRunCompletion where step1 cites [toolcall-1-0 (stale), toolcall-2-0 (fresh)], step2 cites [toolcall-1-0, toolcall-2-0, toolcall-10-0 (verify)],
+	// and an unstepped caveat note cites a command observation (toolcall-1-0).
+	candidate, err := s.PrepareRunCompletion(ctx, owner.TenantID, owner.PersonID, run.ID, RunCompletionInput{
+		ExpectedPlanVersion: plan.Plan.Version,
+		Status:              "done",
+		PlanPatch:           []RunPlanStepInput{{StepID: step2, Status: "completed"}},
+		Assessments: []verification.Assessment{
+			{StepID: step1, EvidenceRefs: []string{"toolcall-1-0", "toolcall-2-0"}, Result: "met", Reason: "Inspected target file."},
+			{StepID: step2, EvidenceRefs: []string{"toolcall-1-0", "toolcall-2-0", "toolcall-10-0"}, Result: "met", Reason: "Verified target."},
+			{EvidenceRefs: []string{"toolcall-1-0"}, Result: "unknown", Reason: "Boundary note referencing command observation."},
+		},
+	})
+	if err != nil || candidate == nil {
+		t.Fatalf("PrepareRunCompletion rejected mixed fresh observations or auxiliary refs on verified step: %v", err)
+	}
+
+	// Non-done completion (waiting_user) drops unverified "met" or "unknown" assessments citing stale evidence instead of deadlocking.
+	rawMut2 := []byte(`{"evidence":{"tool_call_id":"toolcall-11-0","tool_name":"write_file","kind":"mutation","status":"succeeded","started_at_unix_nano":40,"finished_at_unix_nano":45,"files":[{"path":"/workspace/inspected.go","operation":"write","before_sha256":"old","after_sha256":"new"}]}}`)
+	if _, err := s.AppendEvent(ctx, Event{RunID: run.ID, TaskID: task.ID, Type: "evidence.recorded", Payload: rawMut2}); err != nil {
+		t.Fatal(err)
+	}
+	waitingCandidate, err := s.PrepareRunCompletion(ctx, owner.TenantID, owner.PersonID, run.ID, RunCompletionInput{
+		ExpectedPlanVersion: plan.Plan.Version,
+		Status:              "waiting_user",
+		Assessments: []verification.Assessment{
+			{StepID: step1, EvidenceRefs: []string{"toolcall-2-0"}, Result: "unknown", Reason: "Step 1 read is now stale after mutation."},
+			{StepID: step2, EvidenceRefs: []string{"toolcall-10-0"}, Result: "met", Reason: "Step 2 was verified before mutation."},
+		},
+	})
+	if err != nil || waitingCandidate == nil {
+		t.Fatalf("PrepareRunCompletion(waiting_user) deadlocked on stale assessment: %v", err)
+	}
+}

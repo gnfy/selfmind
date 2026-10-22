@@ -228,6 +228,10 @@ func containsPollingLoopDepth(command string, depth int) bool {
 		}
 		return bindingsKnown
 	})
+	var outerLoopBindings map[*syntax.ForClause]map[string]string
+	if bindingsKnown {
+		outerLoopBindings = collectOuterLoopBindings(file.Stmts)
+	}
 	activeWait := false
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil || activeWait {
@@ -237,7 +241,8 @@ func containsPollingLoopDepth(command string, depth int) bool {
 		case *syntax.WhileClause:
 			activeWait = true
 		case *syntax.ForClause:
-			activeWait = forClauseWaits(value) || (!bindingsKnown && finiteLiteralForLoop(value) && loopHasRemoteObservation(value.Do))
+			outer := outerLoopBindings[value]
+			activeWait = forClauseWaitsWithBindings(value, outer) || (!bindingsKnown && finiteLiteralForLoopWithBindings(value, outer) && loopHasRemoteObservation(value.Do))
 		case *syntax.CallExpr:
 			if len(value.Args) == 0 {
 				return true
@@ -253,6 +258,114 @@ func containsPollingLoopDepth(command string, depth int) bool {
 		return !activeWait
 	})
 	return activeWait
+}
+
+func collectOuterLoopBindings(stmts []*syntax.Stmt) map[*syntax.ForClause]map[string]string {
+	out := make(map[*syntax.ForClause]map[string]string)
+	bindings := make(map[string]string)
+	walkOuterLoopBindings(stmts, bindings, out)
+	return out
+}
+
+func walkOuterLoopBindings(stmts []*syntax.Stmt, bindings map[string]string, out map[*syntax.ForClause]map[string]string) {
+	for _, stmt := range stmts {
+		if stmt == nil || stmt.Cmd == nil {
+			continue
+		}
+		if stmt.Negated || stmt.Background || stmt.Coprocess || stmt.Disown {
+			invalidateOuterAssignedVars(stmt, bindings)
+			continue
+		}
+		switch cmd := stmt.Cmd.(type) {
+		case *syntax.CallExpr:
+			if len(cmd.Args) == 0 {
+				applyOuterFanoutAssigns(cmd.Assigns, bindings)
+				continue
+			}
+			if name, ok := staticObservationWord(cmd.Args[0]); ok && name == "unset" {
+				for _, arg := range cmd.Args[1:] {
+					lit, static := staticObservationWord(arg)
+					if !static {
+						for k := range bindings {
+							delete(bindings, k)
+						}
+						break
+					}
+					if !strings.HasPrefix(lit, "-") {
+						delete(bindings, lit)
+					}
+				}
+			}
+		case *syntax.DeclClause:
+			if cmd.Variant.Value == "export" || cmd.Variant.Value == "declare" || cmd.Variant.Value == "typeset" {
+				applyOuterFanoutAssigns(cmd.Args, bindings)
+			} else {
+				invalidateOuterAssignedVars(stmt, bindings)
+			}
+		case *syntax.BinaryCmd:
+			if cmd.Op == syntax.AndStmt {
+				walkOuterLoopBindings([]*syntax.Stmt{cmd.X, cmd.Y}, bindings, out)
+			} else {
+				walkOuterLoopBindings([]*syntax.Stmt{cmd.X}, cloneObservationBindings(bindings), out)
+				walkOuterLoopBindings([]*syntax.Stmt{cmd.Y}, cloneObservationBindings(bindings), out)
+				invalidateOuterAssignedVars(stmt, bindings)
+			}
+		case *syntax.ForClause:
+			out[cmd] = cloneObservationBindings(bindings)
+			invalidateOuterAssignedVars(stmt, bindings)
+		default:
+			invalidateOuterAssignedVars(stmt, bindings)
+		}
+	}
+}
+
+func applyOuterFanoutAssigns(assigns []*syntax.Assign, bindings map[string]string) {
+	for _, assign := range assigns {
+		if assign == nil || assign.Name == nil {
+			continue
+		}
+		name := assign.Name.Value
+		if assign.Naked {
+			continue
+		}
+		if unsafeObservationVarName(name) || assign.Index != nil || assign.Array != nil || assign.Value == nil {
+			delete(bindings, name)
+			continue
+		}
+		val, ok := fanoutLiteral(assign.Value, bindings)
+		if !ok || strings.IndexAny(val, "\r\n\x00") >= 0 || len(val) > 16384 {
+			delete(bindings, name)
+			continue
+		}
+		if assign.Append {
+			prior, known := bindings[name]
+			if !known {
+				delete(bindings, name)
+				continue
+			}
+			val = prior + val
+		}
+		bindings[name] = val
+	}
+}
+
+func invalidateOuterAssignedVars(node syntax.Node, bindings map[string]string) {
+	if node == nil || len(bindings) == 0 {
+		return
+	}
+	syntax.Walk(node, func(n syntax.Node) bool {
+		switch v := n.(type) {
+		case *syntax.Assign:
+			if v.Name != nil {
+				delete(bindings, v.Name.Value)
+			}
+		case *syntax.WordIter:
+			if v.Name != nil {
+				delete(bindings, v.Name.Value)
+			}
+		}
+		return true
+	})
 }
 
 // nestedShellCommand extracts a static `sh -c ...` body through common
@@ -298,6 +411,10 @@ func nestedShellCommand(call *syntax.CallExpr) (string, bool) {
 // $ids`) is still one read per item unless its body sleeps, watches, or nests
 // another wait loop.
 func forClauseWaits(clause *syntax.ForClause) bool {
+	return forClauseWaitsWithBindings(clause, nil)
+}
+
+func forClauseWaitsWithBindings(clause *syntax.ForClause, outer map[string]string) bool {
 	if clause == nil {
 		return false
 	}
@@ -307,10 +424,10 @@ func forClauseWaits(clause *syntax.ForClause) bool {
 	if _, cStyle := clause.Loop.(*syntax.CStyleLoop); cStyle {
 		return true
 	}
-	if finiteLiteralForLoop(clause) {
+	if finiteLiteralForLoopWithBindings(clause, outer) {
 		// A finite list can still repeat the SAME observation until its state
 		// changes. A read of each distinct item is a batch, even with pacing.
-		return loopHasRemoteObservation(clause.Do) && !loopObservesIterator(clause)
+		return loopHasRemoteObservation(clause.Do) && !loopObservesIteratorWithBindings(clause, outer)
 	}
 	return stmtsWait(clause.Do)
 }
@@ -371,6 +488,10 @@ func stmtsWait(stmts []*syntax.Stmt) bool {
 // `for id in a b; do aws ...; done` from dynamic loops. Array length is capped
 // so a generated giant literal list cannot occupy an agent turn indefinitely.
 func finiteLiteralForLoop(clause *syntax.ForClause) bool {
+	return finiteLiteralForLoopWithBindings(clause, nil)
+}
+
+func finiteLiteralForLoopWithBindings(clause *syntax.ForClause, outer map[string]string) bool {
 	if clause == nil || clause.Select {
 		return false
 	}
@@ -379,7 +500,7 @@ func finiteLiteralForLoop(clause *syntax.ForClause) bool {
 		return false
 	}
 	for _, item := range iter.Items {
-		if _, ok := staticObservationWord(item); !ok {
+		if _, ok := staticObservationWordWithBindings(item, outer); !ok {
 			return false
 		}
 	}
@@ -475,7 +596,7 @@ unwrap:
 var pollingObservationRules = map[string]observationRule{
 	"kubectl": {prefixes: [][]string{{"rollout", "status"}, {"wait"}}},
 	"argocd":  {prefixes: [][]string{{"app", "wait"}}},
-	"gh":      {prefixes: [][]string{{"run", "watch"}, {"pr", "checks"}}},
+	"gh":      {prefixes: [][]string{{"run", "watch"}, {"pr", "checks"}, {"pr", "diff"}}},
 	"aws":     {anyArgs: true, verify: awsReadOperation},
 	"az":      {anyArgs: true, verify: azReadOperation},
 }

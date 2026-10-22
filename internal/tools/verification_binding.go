@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,7 +30,7 @@ const legacyVerificationStepIDArg = "_legacy_verification_step_id"
 
 func verificationBindingProperties() map[string]PropertyDef {
 	return map[string]PropertyDef{
-		"step_id":            {Type: "string", Description: "Server-issued Plan step to check, including a pending step. Its stored acceptance condition is inherited; no Plan transition is needed first."},
+		"step_id":            {Type: "string", Description: "Server-issued Plan step to check, including a pending step. Its stored acceptance condition is inherited. Pending steps in an open observation cycle need no transition; reopen a closed cycle as pending with update_plan mode=patch, preserving the current active step, before checking again."},
 		"criterion":          {Type: "string", Description: "Condition for a standalone check (also supply target). Omit when step_id or replaces already identifies the condition. A replacement must preserve the recorded condition exactly."},
 		"target":             {Type: "string", Description: "Exact artifact or operation for a standalone check. Omit to inherit from step_id or replaces. With criterion but no step_id, the check is standalone and cannot complete a Plan step."},
 		"replaces":           {Type: "string", Description: "Evidence id of the check being corrected in this Run. Supply reason and keep cwd; omit criterion, target and step_id to inherit them."},
@@ -111,9 +112,21 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 	if resolver, ok := runPlanProjectionFromArgs(args).(verificationBindingResolver); ok {
 		resolved, err := resolver.ResolveVerification(ContextFromArgs(normalized), b, stringArg(normalized, "cwd"))
 		if err != nil {
+			var closed interface{ VerificationCycleClosed() bool }
+			if errors.As(err, &closed) && closed.VerificationCycleClosed() {
+				return nil, &stableToolError{cause: err, code: "verification_cycle_closed", category: "stale_precondition",
+					safeMessage: RedactSensitive(err.Error()), recoveryHint: "Use update_plan with mode=patch to reopen the selected step as pending, preserving the current in_progress step; then verify once with that step_id. The accepted Plan and historical evidence have not changed.",
+					failurePhase: "preparation", retryability: "after_state_change", effectState: "not_dispatched"}
+			}
 			return nil, err
 		}
 		if resolved != nil {
+			// The storage resolver retains legacy adoption behavior. A tool
+			// caller explicitly replacing evidence must not silently become a
+			// fresh observation (for example after changing cwd).
+			if b.Replaces != "" && resolved.Replaces != b.Replaces {
+				return nil, fmt.Errorf("verification replacement must preserve its recorded condition, target and working directory; for a new Plan observation, pass step_id without replaces")
+			}
 			b = *resolved
 			if err := resolveVerificationDependencies(normalized, &b); err != nil {
 				return nil, err
@@ -163,7 +176,29 @@ func resolveVerificationDependencies(args map[string]interface{}, b *verificatio
 			}
 			path := raw
 			if !filepath.IsAbs(path) {
-				path = filepath.Join(absoluteCWD(stringArg(args, "cwd")), path)
+				cwd := absoluteCWD(stringArg(args, "cwd"))
+				candidate := filepath.Join(cwd, path)
+				if _, statErr := os.Stat(candidate); statErr != nil {
+					cleanRaw := filepath.Clean(raw)
+					cwdBase := filepath.Base(cwd)
+					if cwdBase != "" && cwdBase != "." && cwdBase != string(filepath.Separator) && strings.HasPrefix(cleanRaw, cwdBase+string(filepath.Separator)) {
+						if alt := filepath.Join(filepath.Dir(cwd), cleanRaw); alt != candidate {
+							if _, altErr := os.Stat(alt); altErr == nil {
+								candidate = alt
+							}
+						}
+					}
+					if _, stillErr := os.Stat(candidate); stillErr != nil {
+						if scope, ok := currentExecutionScope(args); ok && strings.TrimSpace(scope.WorkspaceRoot) != "" {
+							if alt := filepath.Join(scope.WorkspaceRoot, cleanRaw); alt != candidate {
+								if _, altErr := os.Stat(alt); altErr == nil {
+									candidate = alt
+								}
+							}
+						}
+					}
+				}
+				path = candidate
 			}
 			if scope, ok := currentExecutionScope(args); ok {
 				var err error

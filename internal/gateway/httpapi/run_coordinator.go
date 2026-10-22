@@ -557,10 +557,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	defer stopHeartbeat()
 	c.updateActive(ctx, task, run)
 	c.signalAsyncAdmission(ctx, identity, task, run)
-	if ctx.Value(asyncAdmissionContextKey{}) != nil {
-		stopProgressNotices := c.startAsyncProgressNotices(ctx, identity, req, run.ID)
-		defer stopProgressNotices()
-	}
 	startedPayload := map[string]interface{}{
 		"input":            truncate(req.Content, 500),
 		"platform":         req.Platform,

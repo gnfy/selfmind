@@ -204,14 +204,19 @@ func Latest(checks []Check) []Check {
 					if existing.Binding != nil && existing.Binding.LocalDependencies != nil {
 						existingDeps = strings.Join(*existing.Binding.LocalDependencies, "\x1f")
 					}
+					unresolvedFixed := c.Binding.StepID != "" &&
+						len(existing.Binding.UnresolvedLocalDependencies) > 0 &&
+						len(c.Binding.UnresolvedLocalDependencies) == 0 &&
+						(existing.Binding.Target == c.Binding.Target || existing.Binding.Target == existing.Binding.StepID || c.Binding.Target == c.Binding.StepID)
 					if existingKey != key &&
 						ValidBinding(existing.Binding) && existing.Binding.Version == 3 &&
-						(existing.Status != "succeeded" || (c.Binding.StepID != "" && existingDeps == dependencies)) &&
 						existing.Binding.StepID == c.Binding.StepID &&
-						existing.Binding.Criterion == c.Binding.Criterion &&
-						existing.Binding.Target == c.Binding.Target &&
 						sameAssessmentSource(existing.Source, c.Source) &&
-						existing.FinishedAt > 0 && existing.FinishedAt <= c.StartedAt {
+						existing.FinishedAt > 0 && existing.FinishedAt <= c.StartedAt &&
+						(unresolvedFixed ||
+							(existing.Binding.Criterion == c.Binding.Criterion &&
+								existing.Binding.Target == c.Binding.Target &&
+								(existing.Status != "succeeded" || (c.Binding.StepID != "" && existingDeps == dependencies)))) {
 						delete(latest, existingKey)
 					}
 				}
@@ -250,6 +255,25 @@ func State(latestMutation int64, checks []Check) (string, string) {
 	return state(latestMutation, checks, func(Check) int64 { return latestMutation })
 }
 
+// stepCheckSupersededByFreshPass reports whether an earlier check on a Plan
+// step has been superseded by a subsequent fresh passing check on the same
+// step and source.
+func stepCheckSupersededByFreshPass(c Check, latest []Check, affectedAt func(Check) int64) bool {
+	if !ValidBinding(c.Binding) || c.Binding.Version != 3 || c.Binding.StepID == "" || c.FinishedAt <= 0 {
+		return false
+	}
+	for _, other := range latest {
+		if other.ToolCallID == c.ToolCallID || !ValidBinding(other.Binding) || other.Binding.Version != 3 ||
+			other.Binding.StepID != c.Binding.StepID || !sameAssessmentSource(other.Source, c.Source) {
+			continue
+		}
+		if other.Status == "succeeded" && other.StartedAt >= c.FinishedAt && other.StartedAt >= affectedAt(other) {
+			return true
+		}
+	}
+	return false
+}
+
 func state(latestMutation int64, checks []Check, affectedAt func(Check) int64) (string, string) {
 	if len(checks) == 0 {
 		if latestMutation == 0 {
@@ -257,12 +281,13 @@ func state(latestMutation int64, checks []Check, affectedAt func(Check) int64) (
 		}
 		return "not_run", "Files changed, but no verification command was recorded after the change."
 	}
+	latest := Latest(checks)
 	current := []Check{}
 	stale := 0
-	for _, c := range Latest(checks) {
+	for _, c := range latest {
 		if c.StartedAt >= affectedAt(c) {
 			current = append(current, c)
-		} else {
+		} else if !stepCheckSupersededByFreshPass(c, latest, affectedAt) {
 			stale++
 		}
 	}

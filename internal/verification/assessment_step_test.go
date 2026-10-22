@@ -135,17 +135,22 @@ func TestStepAssessmentCoversMultipleChecksOnSameStepWhenDefaultOrAllEvidenceRef
 		"step-3": {Criterion: "Bundle is complete and verified", PositiveRequired: true},
 	}
 
-	// Single step assessment citing the latest specific check covers both the default target check and the specific target check.
+	// Single step assessment citing the latest specific check covers both the default target check and the specific target check,
+	// and remains valid on the second-pass projection of recorded Version=1 conditions.
 	p, err := ProjectAssessments("run", []Assessment{
 		{StepID: "step-3", EvidenceRefs: []string{"toolcall-26-0"}, Result: "met", Reason: "Bundle verified."},
 	}, []Check{defaultCheck, specificCheck}, nil, req)
 	if err != nil || !p.ReviewComplete || len(p.Conditions) != 1 {
 		t.Fatalf("step assessment did not cover default + specific check on same step: %+v %v", p, err)
 	}
+	if pReloaded, err := ProjectAssessments("run", p.Conditions, []Check{defaultCheck, specificCheck}, nil, req); err != nil || !pReloaded.ReviewComplete {
+		t.Fatalf("second-pass projection rejected recorded multi-target step condition: %+v %v", pReloaded, err)
+	}
 
 	// Two distinct non-default targets on the same step require citing both evidence_refs if assessed in one entry.
 	nonDefaultA := observedAssessmentCheck("toolcall-30-0", "step-3", "target-a", 0)
 	nonDefaultB := observedAssessmentCheck("toolcall-31-0", "step-3", "target-b", 0)
+	nonDefaultB.CWD = "/workspace/other"
 	if _, err := ProjectAssessments("run", []Assessment{
 		{StepID: "step-3", Result: "met", Reason: "Bare step_id across two non-default targets."},
 	}, []Check{nonDefaultA, nonDefaultB}, nil, req); err == nil {
@@ -156,6 +161,39 @@ func TestStepAssessmentCoversMultipleChecksOnSameStepWhenDefaultOrAllEvidenceRef
 	}, []Check{nonDefaultA, nonDefaultB}, nil, req)
 	if err != nil || !pBoth.ReviewComplete || len(pBoth.Conditions) != 1 {
 		t.Fatalf("step assessment citing all active evidence_refs of the step was rejected: %+v %v", pBoth, err)
+	}
+	if pBothReloaded, err := ProjectAssessments("run", pBoth.Conditions, []Check{nonDefaultA, nonDefaultB}, nil, req); err != nil || !pBothReloaded.ReviewComplete {
+		t.Fatalf("second-pass projection rejected recorded multi-check step condition across CWD/Target: %+v %v", pBothReloaded, err)
+	}
+
+	// Splitting a multi-check step across separate same-result findings (with or without step_id) and superseding an earlier check with unresolved local_dependencies.
+	unresolvedDeps := []string{"cicd/gcp/release.md"}
+	resolvedDeps := []string{"/workspace/cicd/gcp/release.md"}
+	unresolvedFirst := observedAssessmentCheck("toolcall-24-0", "step-3", "step-3", 0)
+	unresolvedFirst.CWD = "/workspace/cicd"
+	unresolvedFirst.StartedAt, unresolvedFirst.FinishedAt = 10, 11
+	unresolvedFirst.Binding.LocalDependencies = &unresolvedDeps
+	unresolvedFirst.Binding.UnresolvedLocalDependencies = unresolvedDeps
+
+	resolvedSecond := observedAssessmentCheck("toolcall-27-0", "step-3", "step-3", 0)
+	resolvedSecond.CWD = "/workspace/cicd"
+	resolvedSecond.StartedAt, resolvedSecond.FinishedAt = 20, 21
+	resolvedSecond.Binding.LocalDependencies = &resolvedDeps
+	resolvedSecond.Binding.ResolvedLocalDependencies = resolvedDeps
+
+	crossCWDThird := observedAssessmentCheck("toolcall-35-0", "step-3", "step-3", 0)
+	crossCWDThird.CWD = "/workspace/ai"
+	crossCWDThird.StartedAt, crossCWDThird.FinishedAt = 30, 31
+
+	pSplit, err := ProjectAssessments("run", []Assessment{
+		{StepID: "step-3", EvidenceRefs: []string{"toolcall-27-0"}, Result: "met", Reason: "Commit verified."},
+		{StepID: "step-3", EvidenceRefs: []string{"toolcall-35-0"}, Result: "met", Reason: "Push verified."},
+	}, []Check{unresolvedFirst, resolvedSecond, crossCWDThird}, nil, req)
+	if err != nil || !pSplit.ReviewComplete {
+		t.Fatalf("split same-step assessments across checks failed: %+v %v", pSplit, err)
+	}
+	if pSplitReloaded, err := ProjectAssessments("run", pSplit.Conditions, []Check{unresolvedFirst, resolvedSecond, crossCWDThird}, nil, req); err != nil || !pSplitReloaded.ReviewComplete {
+		t.Fatalf("second-pass projection of split same-step assessments failed: %+v %v", pSplitReloaded, err)
 	}
 }
 
@@ -177,5 +215,42 @@ func TestSharedObservationNeedsExplicitStepAndKeepsOriginalFacts(t *testing.T) {
 	b.ExitCode = 1
 	if _, err := ProjectAssessments("run", []Assessment{{StepID: "first", Result: "met", Reason: "Cannot hide conflicting execution"}}, []Check{a, b}, nil, req); err == nil {
 		t.Fatal("colliding source ids hid conflicting facts")
+	}
+}
+
+func TestStepAssessmentHandlesSupersededStaleChecksAndSecondaryCaveatNotes(t *testing.T) {
+	deps := []string{"/workspace/target"}
+	staleAttempt := observedAssessmentCheck("toolcall-6-0", "step-2", "step-2", 0)
+	staleAttempt.StartedAt, staleAttempt.FinishedAt = 10, 15
+	staleAttempt.Binding.Criterion = "old criterion wording"
+	staleAttempt.Binding.LocalDependencies = &deps
+	staleAttempt.Binding.ResolvedLocalDependencies = deps
+
+	mutations := []Mutation{{Path: "/workspace/target", FinishedAt: 20}}
+
+	freshAttempt := observedAssessmentCheck("toolcall-10-0", "step-2", "step-2", 0)
+	freshAttempt.StartedAt, freshAttempt.FinishedAt = 30, 35
+	freshAttempt.Binding.Criterion = "updated criterion wording"
+	freshAttempt.Binding.LocalDependencies = &deps
+	freshAttempt.Binding.ResolvedLocalDependencies = deps
+
+	otherStepCheck := observedAssessmentCheck("toolcall-12-0", "step-3", "step-3", 0)
+	otherStepCheck.StartedAt, otherStepCheck.FinishedAt = 40, 45
+
+	req := map[string]AssessmentRequirement{
+		"step-2": {Criterion: "updated criterion wording", PositiveRequired: true},
+		"step-3": {Criterion: "step-3 criterion", PositiveRequired: true},
+	}
+
+	p, err := ProjectAssessments("run", []Assessment{
+		{StepID: "step-2", EvidenceRefs: []string{"toolcall-10-0", "toolcall-12-0"}, Result: "met", Reason: "Fresh check passed."},
+		{EvidenceRefs: []string{"toolcall-prior-99", "toolcall-12-0"}, Result: "met", Reason: "Step 3 passed (unstepped primary with prior-Run ref)."},
+		{EvidenceRefs: []string{"toolcall-6-0"}, Result: "not_met", Reason: "Earlier attempt before fix is superseded by toolcall-10-0."},
+		{EvidenceRefs: []string{"toolcall-10-0"}, Result: "not_met", Reason: "Secondary caveat note on already-assessed step."},
+		{EvidenceRefs: []string{"toolcall-12-0"}, Result: "unknown", Reason: "Secondary caveat note on unstepped primary step-3."},
+		{Result: "unknown", Reason: "Unreferenced boundary disclaimer alongside step assessments."},
+	}, []Check{staleAttempt, freshAttempt, otherStepCheck}, mutations, req)
+	if err != nil || !p.ReviewComplete || len(p.Conditions) != 2 {
+		t.Fatalf("superseded stale check or secondary caveat note rejected: %+v / %v", p, err)
 	}
 }

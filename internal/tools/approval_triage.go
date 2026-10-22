@@ -109,7 +109,7 @@ func triageApprovalWithCurrentIntent(ctx context.Context, judge ApprovalJudge, t
 	}
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	r := reviewApproval(tctx, judge, prompt, approvalFirstAttemptLimit, current)
+	r := reviewApproval(tctx, judge, prompt, approvalFirstAttemptLimit, current, intent.ModelAuthorization)
 	if r.err != nil {
 		return TriageEscalate, TriageAssessment{Response: r.response}, r.err
 	}

@@ -878,9 +878,13 @@ func (d *Server) dispatchAdmitted(ctx context.Context, identity *control.Identit
 	// and the run itself was not cancelled), nobody reads the HTTP response,
 	// so route the result like an async one: IM fan-out for cli-originated
 	// runs, the source channel otherwise. A client that stayed connected gets
-	// the sync answer only, and a user-cancelled run pushes nothing.
-	if ctx.Err() != nil && context.Cause(ctx) == context.Canceled && !turnCancelled(resp) {
-		coord.deliverAsyncResult(context.Background(), identity, req, resp)
+	// the sync answer only, unless the run explicitly pinned a cross-endpoint
+	// delivery override (e.g., set_delivery_target to a bound IM channel).
+	if !turnCancelled(resp) {
+		detached := ctx.Err() != nil && context.Cause(ctx) == context.Canceled
+		if detached || coord.hasCrossEndpointDeliveryOverride(context.Background(), identity, req, resp) {
+			coord.deliverAsyncResult(context.Background(), identity, req, resp)
+		}
 	}
 	return resp, status, nil
 }

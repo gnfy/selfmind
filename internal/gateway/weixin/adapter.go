@@ -348,10 +348,16 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		return nil
 	}
 	if strings.TrimSpace(resp.Content) != "" {
-		return client.Send(context.Background(), chatID, resp.Content)
+		if sendErr := client.Send(context.Background(), chatID, resp.Content); sendErr != nil {
+			log.Warn("weixin reply send failed after inbound acceptance", "msg_id", msgID, "error", tools.RedactSensitive(sendErr.Error()))
+		}
+		return nil
 	}
 	if resp.Accepted {
-		return client.Send(context.Background(), chatID, router.WorkingNotice("weixin"))
+		if sendErr := client.Send(context.Background(), chatID, router.WorkingNotice("weixin")); sendErr != nil {
+			log.Warn("weixin working notice send failed after inbound acceptance", "msg_id", msgID, "error", tools.RedactSensitive(sendErr.Error()))
+		}
+		return nil
 	}
 	return nil
 }

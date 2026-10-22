@@ -134,7 +134,7 @@ func (s *runCompletionSession) CompleteRun(ctx context.Context, fields map[strin
 	}
 	candidate, err := c.srv.Control.PrepareRunCompletion(ctx, s.identity.TenantID, s.identity.PersonID, s.run.ID, input)
 	if err != nil {
-		return true, completionToolError(err)
+		return true, s.completionRefusal(ctx, err, len(patch) > 0)
 	}
 	outcome.Assessments = candidate.Conditions
 	outcome.CompletionReason = completionReasonForStatus(outcome.Status)
@@ -169,7 +169,7 @@ func (s *runCompletionSession) CompleteRun(ctx context.Context, fields map[strin
 	}
 	outcome.Verification, outcome.Files = verdict, files
 	if outcome.Status == "done" && verificationRequiresResume(verdict, files) {
-		return true, &completionFailure{error: fmt.Errorf("completion requires verification evidence: %s", verdict.Summary)}
+		return true, s.completionRefusal(ctx, &completionFailure{error: fmt.Errorf("completion requires verification evidence: %s", verdict.Summary)}, len(patch) > 0)
 	}
 	body, _ := fields["final_response"].(string)
 	body = withVerificationNotice(body, verdict, verificationClaimMismatches(outcome))
@@ -183,7 +183,7 @@ func (s *runCompletionSession) CompleteRun(ctx context.Context, fields map[strin
 	event := control.Event{Type: "run.finished", Visibility: "task", Channel: s.req.Channel, Payload: mustJSON(map[string]interface{}{"outcome": storedOutcome})}
 	err = c.materializeRunFinalization(ctx, s.identity, s.task, s.run, taskStatusForFinalization(outcome, true), s.replay.WorkspaceID, s.replay.UserInput, s.req.Channel, body, outcome, s.replay.Attach, handoff, event, candidate)
 	if err != nil {
-		return true, completionToolError(err)
+		return true, s.completionRefusal(ctx, err, len(patch) > 0)
 	}
 	// No fallible operation below can invalidate the committed result.
 	fields["final_response"] = body
@@ -221,8 +221,17 @@ func completionReasonForStatus(status string) string {
 
 type completionFailure struct {
 	error
-	input   bool
-	changed bool
+	input        bool
+	changed      bool
+	receipt      string
+	recoveryHint string
+}
+
+func (e *completionFailure) Error() string {
+	if e.receipt != "" {
+		return e.error.Error() + "\n" + e.receipt
+	}
+	return e.error.Error()
 }
 
 func (e *completionFailure) ToolErrorCode() string {
@@ -247,8 +256,11 @@ func (e *completionFailure) ToolRetryability() string {
 	}
 	return "after_state_change"
 }
-func (*completionFailure) ToolRecoveryHint() string {
-	return "Review the accepted Plan and evidence. Correct input without rerunning checks; observe again only when evidence is missing or stale."
+func (e *completionFailure) ToolRecoveryHint() string {
+	if e.recoveryHint != "" {
+		return e.recoveryHint
+	}
+	return "Review the accepted Plan and evidence. Correct input without rerunning checks; observe again only when evidence is missing or stale. Resubmit any intended final plan_patch with the corrected finish_run; rejected patches are not saved."
 }
 
 func completionToolError(err error) error {
@@ -281,4 +293,79 @@ func (e *completionCommitError) ToolRunError() error {
 		return context.Canceled
 	}
 	return fmt.Errorf("%w: %v", errRunResultCommit, e.error)
+}
+
+// Read accepted state only after the rollback-only candidate has returned. Never
+// present the rejected proposal as progress, or turn storage failures into input retries.
+func (s *runCompletionSession) completionRefusal(ctx context.Context, err error, hadPatch bool) error {
+	var failure *completionFailure
+	if !errors.As(err, &failure) {
+		err = completionToolError(err)
+		if !errors.As(err, &failure) {
+			return err
+		}
+	}
+	failure.receipt = "Finish proposal not committed."
+	if hadPatch {
+		failure.receipt += " plan_patch not committed."
+	}
+	snapshot, readErr := s.coordinator.srv.Control.ReadRunRecoverySnapshot(ctx, s.identity.TenantID, s.identity.PersonID, s.run.ID)
+	if readErr != nil {
+		failure.receipt += " Accepted Plan unavailable; inspect the current Run before retrying."
+		return failure
+	}
+	plan := snapshot.Plan
+	type acceptedStep struct {
+		StepID string `json:"step_id"`
+		Status string `json:"status"`
+	}
+	receipt := struct {
+		Version  int                            `json:"accepted_plan_version"`
+		Steps    []acceptedStep                 `json:"accepted_steps"`
+		More     bool                           `json:"more_steps,omitempty"`
+		Recovery []control.VerificationRecovery `json:"recovery,omitempty"`
+	}{Steps: []acceptedStep{}}
+	if plan != nil {
+		receipt.Version = plan.Version
+		for i, step := range plan.Steps {
+			if i == 16 {
+				receipt.More = true
+				break
+			}
+			receipt.Steps = append(receipt.Steps, acceptedStep{StepID: step.StepID, Status: step.Status})
+		}
+	}
+	receipt.Recovery = snapshot.EvidenceRecovery(failure.error)
+	if len(receipt.Recovery) > 0 {
+		failure.input = true
+		parts := []string{}
+		for _, recovery := range receipt.Recovery {
+			checkHint := "verify for step " + recovery.StepID
+			if recovery.Replaces != "" {
+				checkHint += " with replaces=" + recovery.Replaces + " and a reason preserving the unchanged condition, using the cwd from this recovery receipt"
+			}
+			switch recovery.Action {
+			case "cite":
+				parts = append(parts, "Review the listed current evidence_refs for step "+recovery.StepID+" and cite only observations that prove the unchanged condition; no new check is required if they suffice.")
+			case "reopen":
+				failure.input = false
+				parts = append(parts, "Use update_plan with mode=patch to reopen step "+recovery.StepID+" as pending, preserving the current in_progress step; then "+checkHint+" once.")
+			case "verify":
+				failure.input = false
+				parts = append(parts, "Obtain a fresh observation with "+checkHint+"; its accepted observation cycle needs no reopening.")
+			default:
+				failure.input = false
+				parts = append(parts, "Inspect the exact Run and unresolved observation or external-effect facts before retrying; do not replay business effects.")
+			}
+		}
+		var issues *verification.EvidenceIssuesError
+		if errors.As(failure.error, &issues) && issues.Omitted > 0 {
+			failure.input = false
+			parts = append(parts, "Further observation issues were omitted; reconsider remaining evidence after these corrections.")
+		}
+		failure.recoveryHint = strings.Join(parts, " ") + " Resubmit any intended final plan_patch with the corrected finish_run; the rejected patch was not saved."
+	}
+	raw, _ := json.Marshal(receipt)
+	failure.receipt += " " + string(raw)
+	return failure
 }

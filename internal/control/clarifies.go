@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,6 +149,69 @@ func (s *Store) GetClarifyRequest(ctx context.Context, tenantID, clarifyID strin
 	return &item, nil
 }
 
+// ClarifyChoices returns the non-empty option labels stored on a clarification.
+func ClarifyChoices(optionsJSON json.RawMessage) []string {
+	if len(optionsJSON) == 0 {
+		return nil
+	}
+	var raw []string
+	if err := json.Unmarshal(optionsJSON, &raw); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// ResolveClarifyOption maps a bare 1-based option ordinal ("1", "2", ...) onto
+// the corresponding structured option text when options are present. Free-text
+// answers and out-of-range numbers are returned trimmed as-is.
+func ResolveClarifyOption(answer string, optionsJSON json.RawMessage) string {
+	trimmed := strings.TrimSpace(answer)
+	if trimmed == "" {
+		return answer
+	}
+	choices := ClarifyChoices(optionsJSON)
+	if len(choices) == 0 {
+		return trimmed
+	}
+	if idx, err := strconv.Atoi(trimmed); err == nil && idx >= 1 && idx <= len(choices) {
+		return choices[idx-1]
+	}
+	return trimmed
+}
+
+// PendingClarifyForRun returns the newest pending clarification attached to one
+// exact Run for the person, or nil when none is pending.
+func (s *Store) PendingClarifyForRun(ctx context.Context, tenantID, personID, runID string) (*ClarifyRequest, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("control store is unavailable")
+	}
+	personID = strings.TrimSpace(personID)
+	runID = strings.TrimSpace(runID)
+	if personID == "" || runID == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+clarifySelectColumns+`
+		 FROM clarify_requests
+		 WHERE tenant_id = ? AND person_id = ? AND run_id = ? AND status = 'pending'
+		 ORDER BY created_at DESC, id DESC LIMIT 1`,
+		normalizeTenant(tenantID), personID, runID)
+	item, err := scanClarifyRequest(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 // AnswerClarifyRequest records the person's free-text reply and finalizes the
 // question. Only a pending row is claimed; the answering channel overwrites the
 // requesting channel (last surface to touch the question). The blocking waiter
@@ -165,6 +229,17 @@ func (s *Store) AnswerClarifyRequest(ctx context.Context, tenantID, personID, cl
 	if strings.TrimSpace(answer) == "" {
 		return nil, fmt.Errorf("answer is required")
 	}
+	existing, err := s.GetClarifyRequest(ctx, tenantID, clarifyID)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil || existing.PersonID != personID {
+		return nil, fmt.Errorf("clarify request not found: %s", clarifyID)
+	}
+	if existing.Status != "pending" {
+		return nil, fmt.Errorf("clarify request %s is already %s", clarifyID, existing.Status)
+	}
+	answer = ResolveClarifyOption(answer, existing.Options)
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE clarify_requests
 		 SET status = 'answered', answer = ?, channel = ?, updated_at = ?
@@ -175,18 +250,23 @@ func (s *Store) AnswerClarifyRequest(ctx context.Context, tenantID, personID, cl
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
-		existing, err := s.GetClarifyRequest(ctx, tenantID, clarifyID)
+		latest, err := s.GetClarifyRequest(ctx, tenantID, clarifyID)
 		if err != nil {
 			return nil, err
 		}
-		if existing == nil || existing.PersonID != personID {
+		if latest == nil || latest.PersonID != personID {
 			return nil, fmt.Errorf("clarify request not found: %s", clarifyID)
 		}
-		if existing.Status != "pending" {
-			return nil, fmt.Errorf("clarify request %s is already %s", clarifyID, existing.Status)
+		if latest.Status != "pending" {
+			return nil, fmt.Errorf("clarify request %s is already %s", clarifyID, latest.Status)
 		}
 	}
-	return s.GetClarifyRequest(ctx, tenantID, clarifyID)
+	clarify, err := s.GetClarifyRequest(ctx, tenantID, clarifyID)
+	if err != nil {
+		return nil, err
+	}
+	s.appendClarifyAnsweredEvent(ctx, clarify, channel)
+	return clarify, nil
 }
 
 // AnswerClarifyRequestWithResume records one person's answer and, when the
@@ -208,15 +288,15 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var status, owner, taskID, runID, runStatus, runPersonID, runTaskID, legacyClaim, parkedAdmission string
+	var status, owner, taskID, runID, optionsRaw, runStatus, runPersonID, runTaskID, legacyClaim, parkedAdmission string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT c.status, c.person_id, COALESCE(c.thread_id, ''), COALESCE(c.run_id, ''),
+		`SELECT c.status, c.person_id, COALESCE(c.thread_id, ''), COALESCE(c.run_id, ''), COALESCE(c.options_json, '[]'),
 		        COALESCE(r.status, ''), COALESCE(r.person_id, ''), COALESCE(r.thread_id, ''),
 		        COALESCE(r.resumed_by_run_id, ''), COALESCE(r.admission_json, '')
 		 FROM clarify_requests c
 		 LEFT JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.run_id
 		 WHERE c.tenant_id = ? AND c.id = ?`, tenantID, clarifyID,
-	).Scan(&status, &owner, &taskID, &runID, &runStatus, &runPersonID, &runTaskID, &legacyClaim, &parkedAdmission); err != nil {
+	).Scan(&status, &owner, &taskID, &runID, &optionsRaw, &runStatus, &runPersonID, &runTaskID, &legacyClaim, &parkedAdmission); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil, fmt.Errorf("clarify request not found: %s", clarifyID)
 		}
@@ -225,6 +305,7 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 	if owner != personID || status != "pending" {
 		return nil, nil, fmt.Errorf("clarify request %s is not an answerable pending request", clarifyID)
 	}
+	answer = ResolveClarifyOption(answer, json.RawMessage(optionsRaw))
 	expireUnavailable := func(reason string) (*ClarifyRequest, *QueuedTask, error) {
 		result, updateErr := tx.ExecContext(ctx,
 			`UPDATE clarify_requests SET status = 'expired', updated_at = ?
@@ -330,7 +411,37 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 	if err != nil {
 		return nil, nil, err
 	}
+	s.appendClarifyAnsweredEvent(ctx, clarify, channel)
 	return clarify, queued, nil
+}
+
+func (s *Store) appendClarifyAnsweredEvent(ctx context.Context, clarify *ClarifyRequest, channel string) {
+	if s == nil || clarify == nil || strings.TrimSpace(clarify.TaskID) == "" || clarify.Status != "answered" {
+		return
+	}
+	payload := map[string]string{
+		"clarify_id": clarify.ID,
+		"question":   clarify.Question,
+		"answer":     clarify.Answer,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	if channel = strings.TrimSpace(channel); channel == "" {
+		channel = clarify.Channel
+	}
+	_, _ = s.AppendEvent(ctx, Event{
+		TenantID:       clarify.TenantID,
+		PersonID:       clarify.PersonID,
+		TaskID:         clarify.TaskID,
+		RunID:          clarify.RunID,
+		Type:           "clarify.answered",
+		Visibility:     "task",
+		Channel:        channel,
+		Payload:        data,
+		IdempotencyKey: "clarify:" + clarify.ID + ":answered",
+	})
 }
 
 // MarkClarifyNotified stamps notified_at on a pending question once an IM

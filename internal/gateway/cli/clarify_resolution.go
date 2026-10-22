@@ -24,5 +24,12 @@ func (m *uiModel) resolveClarifyElsewhere(msg MsgClarifyResolved) {
 	m.clarifyMode, m.clarifyGateway = false, false
 	m.clarifyChoices = nil
 	m.clarifyReq = tools.ClarifyRequest{}
+	if !m.daemonRunActive && !m.localRequestActive && m.runStatus == "waiting_user" {
+		if m.queuedCount > 0 {
+			m.runStatus = "queued"
+		} else {
+			m.runStatus = "idle"
+		}
+	}
 	m.setStatusNotice(noticeInfo, "The question is no longer pending.")
 }

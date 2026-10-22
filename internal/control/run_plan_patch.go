@@ -12,6 +12,9 @@ import (
 type PlanVersionChangedError struct{ Expected, Current int }
 
 func (e *PlanVersionChangedError) Error() string {
+	if e.Current == 0 {
+		return "cannot patch Plan: no accepted Plan exists yet (current version 0); submit the initial complete Plan with mode=\"snapshot\" first"
+	}
 	return fmt.Sprintf("accepted Plan changed: execution snapshot version %d, current version %d; inspect the current Plan and submit a complete snapshot before patching again", e.Expected, e.Current)
 }
 func (e *PlanVersionChangedError) CurrentPlanVersion() int { return e.Current }

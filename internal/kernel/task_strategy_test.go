@@ -314,3 +314,33 @@ func TestPlanGuidanceCarriesStepDisciplineUnderBothPolicies(t *testing.T) {
 		t.Fatalf("a disabled turn keeps its refusal: %s", guidance)
 	}
 }
+
+func TestWeChatPeerChannelNormalizesToIMAndBoundsExternalLookupBudget(t *testing.T) {
+	strategy := BuildTaskStrategy("你查一下GCP生产环境今天发了哪些内容？", "o9cq80wNg3wG1WeinjnbDItUg0es@im.wechat")
+	if strategy.ChannelMode != "im" {
+		t.Fatalf("channel mode = %q, want im", strategy.ChannelMode)
+	}
+	if strategy.Class != TaskClassExternalLookup {
+		t.Fatalf("class = %q, want external_lookup", strategy.Class)
+	}
+	applied := (ToolBudgetPolicy{Initial: 12, Step: 6, Limit: 64, MaxExtensions: 8}).apply(strategy)
+	if applied.ActionToolBudgetLimit != 20 || applied.MaxBudgetExtensions != 2 {
+		t.Fatalf("IM external lookup budget = limit:%d extensions:%d, want 20/2", applied.ActionToolBudgetLimit, applied.MaxBudgetExtensions)
+	}
+	note := applied.SystemPromptNote()
+	if !strings.Contains(note, "Channel: im.") || !strings.Contains(note, "For IM channels, avoid token-by-token narration") || !strings.Contains(note, "omit unqueried timestamps/fields") {
+		t.Fatalf("IM system prompt note missing IM guidance:\n%s", note)
+	}
+}
+
+func TestUUIDSessionChannelPromptNoteStaysCacheStable(t *testing.T) {
+	rawUUID := "571be571-1609-4387-86aa-2858dbb8cf90"
+	strategy := BuildTaskStrategy("inspect this repository", rawUUID)
+	if strategy.ChannelMode != rawUUID {
+		t.Fatalf("channel mode = %q, want %q for admission snapshot fidelity", strategy.ChannelMode, rawUUID)
+	}
+	note := strategy.SystemPromptNote()
+	if !strings.Contains(note, "Channel: interactive.") || strings.Contains(note, rawUUID) {
+		t.Fatalf("UUID channel leaked into system prompt note:\n%s", note)
+	}
+}

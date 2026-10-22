@@ -712,3 +712,18 @@ func TestNewRuntimeHarnessRunsQueuedReviewsLikeTheDaemon(t *testing.T) {
 		t.Fatalf("maintenance pass left %d review job(s) without running them", len(left))
 	}
 }
+
+func TestRunCaseFinishedTurnsReleaseCapacity(t *testing.T) {
+	_, cfgPath := writeRunnerFixtures(t)
+	c, err := LoadCase("../../evalcases/reliability/finished-turn-releases-capacity.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := runLoadedCase(t, cfgPath, c)
+	if result.Status != "passed" {
+		t.Fatalf("finished turns blocked admission or changed state: %v", failedChecks(result))
+	}
+	if result.InputTokens != 0 || result.OutputTokens != 0 {
+		t.Fatal("deterministic admission check called a model")
+	}
+}

@@ -283,10 +283,9 @@ func NewVerifyTool() *VerifyTool {
 	}
 	schema.Properties["effect_claim_id"] = NewExecuteCommandTool().Schema().Properties["effect_claim_id"]
 	return &VerifyTool{BaseTool: BaseTool{
-		name: "verify",
-		description: "Run a verification command and record evidence. For a Plan check, supply command and step_id; the stored acceptance condition is inherited. To correct an earlier check, supply command, replaces and reason with the same cwd; no need to repeat its condition. A standalone check uses criterion and target. A nonzero exit records a failed check; use the output to distinguish a negative result from a broken method. Bash uses -e and pipefail: handle expected nonzero exits explicitly with conditionals. Bind effect_claim_id only when this same proven read-only check observes an unresolved effect. " +
-			"A check runs offline unless it reaches a remote service; set network: true when it needs its dependencies downloaded. A pass that ran offline although the workspace permits network is reported as such.",
-		schema: schema,
+		name:        "verify",
+		description: "Run a verification command and record evidence. Plan checks use command and step_id to inherit acceptance. Correct a check with command, replaces, reason and the same cwd; omit criterion/target to inherit. Standalone checks need criterion and target. Nonzero exits record failure: distinguish a negative result from a broken method. Bash uses -e and pipefail; handle expected nonzero exits explicitly. Bind effect_claim_id only for a proven read-only check observing that unresolved effect. Set network: true for remote APIs or dependency downloads. Offline passes remain identified as offline.",
+		schema:      schema,
 	}}
 }
 

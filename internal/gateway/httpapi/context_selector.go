@@ -335,8 +335,10 @@ func (c *RunCoordinator) workContinuityHints(ctx context.Context, identity *cont
 			RunID: card.RunID, TaskID: card.TaskID, Title: card.Title, RunStatus: card.RunStatus,
 			Channel: card.Channel, Workspace: card.Workspace, InputSummary: card.InputSummary,
 			HandoffSummary: card.HandoffSummary, CurrentStep: card.CurrentStep,
-			NextSteps:    append([]string(nil), card.NextSteps...),
-			ChangedFiles: append([]string(nil), card.ChangedFiles...), Risks: append([]string(nil), card.Risks...),
+			PendingClarifyID: card.PendingClarifyID, PendingQuestion: card.PendingQuestion,
+			PendingChoices: append([]string(nil), card.PendingChoices...),
+			NextSteps:      append([]string(nil), card.NextSteps...),
+			ChangedFiles:   append([]string(nil), card.ChangedFiles...), Risks: append([]string(nil), card.Risks...),
 		})
 		if len(hints) == limit {
 			break

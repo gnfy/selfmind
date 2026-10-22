@@ -18,7 +18,11 @@ func (s *Store) RunRelevantExternalEffects(ctx context.Context, tenant, person, 
 	if run == nil || run.PersonID != person {
 		return nil, fmt.Errorf("effect facts Run is unavailable for this person")
 	}
-	lineage, err := runLineage(ctx, s.db, tenant, person, runID)
+	return runRelevantExternalEffects(ctx, s.db, s.instance, tenant, person, runID)
+}
+
+func runRelevantExternalEffects(ctx context.Context, db externalClaimQuerier, instance, tenant, person, runID string) ([]ExternalEffectClaim, error) {
+	lineage, err := runLineage(ctx, db, tenant, person, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +35,7 @@ func (s *Store) RunRelevantExternalEffects(ctx context.Context, tenant, person, 
 		return nil, err
 	}
 	list := string(raw)
-	claims, err := queryExternalEffectClaims(ctx, s.db, s.instance, `WHERE c.tenant_id=? AND c.person_id=? AND c.state<>'observed'
+	claims, err := queryExternalEffectClaims(ctx, db, instance, `WHERE c.tenant_id=? AND c.person_id=? AND c.state<>'observed'
 		AND (c.run_id IN (SELECT value FROM json_each(?))
 		OR EXISTS (SELECT 1 FROM approval_requests a, json_each(a.payload_json,'$.external_effect_claim_ids') j
 		  WHERE a.tenant_id=c.tenant_id AND a.person_id=c.person_id AND a.run_id IN (SELECT value FROM json_each(?)) AND j.value=c.id)

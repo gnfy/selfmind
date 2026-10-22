@@ -39,6 +39,7 @@ type CiteableEvidence struct {
 // that only says "unavailable" leaves the model to guess the way out.
 type EvidenceUnavailableError struct {
 	Ref      string
+	StepID   string
 	Citeable []CiteableEvidence
 	// Note is what the runtime knows about Ref beyond this Run's own checks, for
 	// example the earlier-Run observation a Plan step stands on.
@@ -83,12 +84,8 @@ func (e *EvidenceUnavailableError) Error() string {
 
 // unusableEvidence says why a check cannot back an assessment, or "" when it can.
 func unusableEvidence(ref string, check Check, mutations []Mutation) string {
-	static := check.Observation != nil && check.Observation.Kind == "file" && check.Status == "succeeded"
-	if check.Invoked == nil || !*check.Invoked || !static && (check.ProcessStarted == nil || !*check.ProcessStarted || check.ExitCode < 0) || check.Status == "blocked" || check.EffectState == "unknown" || check.EffectState == "not_dispatched" {
-		return fmt.Sprintf("verification evidence %q has no confirmed execution and exit observation", ref)
-	}
-	if check.StartedAt < RelevantMutationAt(check, mutations) {
-		return fmt.Sprintf("verification evidence %q is stale after changes to its inputs", ref)
+	if issue := observationIssue(ref, check, mutations); issue != nil {
+		return issue.Error()
 	}
 	return ""
 }
@@ -128,6 +125,8 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 	if len(input) > 128 {
 		return out, fmt.Errorf("condition history exceeds the bounded review limit")
 	}
+	allChecks := checks
+	checks = filterSupersededStaleStepChecks(checks, mutations)
 	byID, err := currentEvidenceByID(checks)
 	if err != nil {
 		return out, err
@@ -136,6 +135,7 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 	seen := map[string]bool{}
 	type conditionIdentity struct{ step, criterion, target, cwd string }
 	conditions := map[conditionIdentity]Assessment{}
+	issues := &EvidenceIssuesError{}
 	for i, assessment := range input {
 		if assessment.Result != "met" && assessment.Result != "not_met" && assessment.Result != "unknown" {
 			return out, fmt.Errorf("assessments[%d].result must be met, not_met or unknown", i)
@@ -144,7 +144,10 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 		if assessment.Reason == "" || len(assessment.Reason) > 1000 {
 			return out, fmt.Errorf("assessments[%d] needs a reason of at most 1000 bytes", i)
 		}
-		bound, err := assessmentChecks(assessment, checks, byID, requirements)
+		if isSecondaryNoteOnAssessedStep(i, assessment, input, allChecks, byID) {
+			continue
+		}
+		bound, err := assessmentChecks(assessment, input, checks, allChecks, byID, requirements)
 		if err != nil {
 			if assessment.Version == 0 && assessment.StepID != "" && len(assessment.EvidenceRefs) == 0 &&
 				(assessment.Result == "unknown" || assessment.Result == "not_met") {
@@ -160,12 +163,28 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 					continue
 				}
 			}
-			if isRedundantStepSummary(i, assessment, input, checks, byID, requirements) {
+			if isRedundantStepSummary(i, assessment, input, allChecks, byID, requirements) {
 				continue
 			}
 			var unavailable *EvidenceUnavailableError
 			if errors.As(err, &unavailable) {
 				unavailable.Citeable = citeableEvidence(byID, mutations)
+				unavailable.StepID = assessment.StepID
+				if unavailable.StepID == "" {
+					selected := ""
+					ambiguous := false
+					for _, check := range checks {
+						if check.Source == nil && check.ToolCallID == unavailable.Ref && ValidBinding(check.Binding) {
+							if selected != "" && selected != check.Binding.StepID {
+								ambiguous = true
+							}
+							selected = check.Binding.StepID
+						}
+					}
+					if !ambiguous {
+						unavailable.StepID = selected
+					}
+				}
 			}
 			return out, err
 		}
@@ -173,13 +192,16 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 		refs := make([]string, 0, len(bound))
 		localSeen := map[string]bool{}
 		var duplicateRef string
+		invalidObservation := false
 		for _, check := range bound {
 			ref := check.ToolCallID
 			if ref == "" || !ValidBinding(check.Binding) {
 				return out, fmt.Errorf("finding has no bound observation identity")
 			}
-			if why := unusableEvidence(ref, check, mutations); why != "" {
-				return out, errors.New(why)
+			if issue := observationIssue(ref, check, mutations); issue != nil {
+				issues.add(*issue)
+				invalidObservation = true
+				continue
 			}
 			if first == nil {
 				copy := check
@@ -197,6 +219,9 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 			}
 			refs = append(refs, ref)
 		}
+		if invalidObservation {
+			continue
+		}
 		b := first.Binding
 		if requirement := requirements[b.StepID]; requirement.PositiveRequired && assessment.Result == "met" {
 			for _, check := range bound {
@@ -208,6 +233,22 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 		identity := conditionIdentity{b.StepID, b.Criterion, b.Target, first.CWD}
 		if prev, exists := conditions[identity]; exists {
 			if prev.Result == assessment.Result && isSubsetStringSlice(refs, prev.EvidenceRefs) && sameAssessmentSource(prev.Source, first.Source) {
+				continue
+			}
+			if prev.Result == assessment.Result && duplicateRef == "" && sameAssessmentSource(prev.Source, first.Source) && len(prev.EvidenceRefs)+len(refs) <= 8 {
+				for key := range localSeen {
+					seen[key] = true
+					covered[key] = assessment.Result != "unknown"
+				}
+				mergedRefs := append(append([]string(nil), prev.EvidenceRefs...), refs...)
+				prev.EvidenceRefs = mergedRefs
+				conditions[identity] = prev
+				for idx := range out.Conditions {
+					if out.Conditions[idx].StepID == prev.StepID && out.Conditions[idx].Criterion == prev.Criterion && out.Conditions[idx].Target == prev.Target && out.Conditions[idx].CWD == prev.CWD && sameAssessmentSource(out.Conditions[idx].Source, prev.Source) {
+						out.Conditions[idx].EvidenceRefs = mergedRefs
+						break
+					}
+				}
 				continue
 			}
 			if duplicateRef != "" {
@@ -256,6 +297,9 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 			out.State = assessment.Result
 		}
 	}
+	if len(issues.Issues) > 0 {
+		return out, issues
+	}
 	out.ReviewComplete = len(out.Blockers) == 0
 	for _, check := range Latest(checks) {
 		if check.Status != "succeeded" && !covered[assessmentReference(check, check.ToolCallID)] {
@@ -303,6 +347,27 @@ func CiteableChecks(checks []Check, mutations []Mutation) ([]CiteableEvidence, e
 	return citeableEvidence(byID, mutations), nil
 }
 
+func filterSupersededStaleStepChecks(checks []Check, mutations []Mutation) []Check {
+	latest := Latest(checks)
+	affectedAt := func(c Check) int64 { return RelevantMutationAt(c, mutations) }
+	superseded := map[string]bool{}
+	for _, c := range latest {
+		if c.StartedAt < affectedAt(c) && stepCheckSupersededByFreshPass(c, latest, affectedAt) {
+			superseded[checkReference(c, c.ToolCallID)] = true
+		}
+	}
+	if len(superseded) == 0 {
+		return checks
+	}
+	out := make([]Check, 0, len(checks))
+	for _, c := range checks {
+		if !superseded[checkReference(c, c.ToolCallID)] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func sameStepAssessmentObligation(first, check Check, explicitRefs bool) bool {
 	if check.Binding.StepID != first.Binding.StepID || !sameAssessmentSource(check.Source, first.Source) {
 		return false
@@ -316,7 +381,7 @@ func sameStepAssessmentObligation(first, check Check, explicitRefs bool) bool {
 	if first.Binding.StepID == "" {
 		return false
 	}
-	if explicitRefs {
+	if explicitRefs || check.Binding.Target == first.Binding.Target {
 		return true
 	}
 	return first.Binding.Target == first.Binding.StepID || check.Binding.Target == check.Binding.StepID

@@ -2555,6 +2555,7 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 			activateToolsForActiveSkill(ctx)
 			bundle.SelectionNotes = append(bundle.SelectionNotes, "one active skill selected for the current work unit")
 		} else if len(selected.Candidates) > 0 {
+			activateToolsForActiveSkill(ctx)
 			bundle.SelectionNotes = append(bundle.SelectionNotes, fmt.Sprintf("%d bounded skill candidate(s) selected for the current work unit", len(selected.Candidates)))
 		}
 	}

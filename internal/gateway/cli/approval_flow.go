@@ -89,6 +89,7 @@ func (m *uiModel) approvalFlowActive() bool {
 // does not set the legacy "type y to allow" notice — the panel is the prompt.
 func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 	m.stopModelWait()
+	m.approvalComposerFocused = false
 	m.pendingApprovalID = msg.ID
 	m.pendingApprovalTool = msg.Tool
 	m.approvalPrompt = components.NewApprovalPromptDetailedWithTheme(components.ApprovalDetails{
@@ -117,6 +118,9 @@ func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 	record := "⚠ Approval required: " + msg.Tool
 	if msg.Delegated {
 		record += " (sub-agent)"
+	}
+	if runID := strings.TrimSpace(msg.RunID); runID != "" {
+		record += " [run=" + runID + "]"
 	}
 	if reason := strings.TrimSpace(msg.Reason); reason != "" {
 		record += " — " + reason
@@ -195,6 +199,7 @@ func (m *uiModel) armNextQueuedApproval() {
 // resolution or local teardown.
 func (m *uiModel) clearApprovalFlow() {
 	m.approvalPrompt = nil
+	m.approvalComposerFocused = false
 	m.approvalQueue = nil
 	m.delayedApprovals = nil
 	m.pendingApprovalID = ""
@@ -224,6 +229,7 @@ func (m *uiModel) settleApprovalFlowAtRunEnd() {
 		return
 	}
 	m.approvalPrompt = nil
+	m.approvalComposerFocused = false
 	m.pendingApprovalID = ""
 	m.pendingApprovalTool = ""
 	m.approvalQueue = parkedQueue
@@ -260,6 +266,7 @@ func (m *uiModel) resolveApprovalChoice(opt components.ApprovalOption) tea.Cmd {
 		return clearStatusNoticeAfter(id, 3*time.Second)
 	}
 	m.approvalPrompt = nil
+	m.approvalComposerFocused = false
 	m.addNotice(noticeSuccess, "✓ Approved "+tool+approvalDecisionNote(opt))
 	noticeID := m.setStatusNotice(noticeSuccess, "Approved "+tool+" — resuming.")
 	m.resumeAfterApproval()
@@ -283,6 +290,7 @@ func (m *uiModel) rejectCurrentApproval(cancelled bool) tea.Cmd {
 		return clearStatusNoticeAfter(id, 3*time.Second)
 	}
 	m.approvalPrompt = nil
+	m.approvalComposerFocused = false
 	record, status := "✗ Denied "+tool, "Denied."
 	if cancelled {
 		record = "✗ Cancelled approval for " + tool

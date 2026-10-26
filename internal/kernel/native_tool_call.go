@@ -131,7 +131,7 @@ func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrat
 			dropped++
 			continue
 		}
-		if isLifecycleToolName(call.Function) {
+		if !countsAgainstActionBudget(call.Function) {
 			out = append(out, call)
 			continue
 		}
@@ -185,11 +185,24 @@ func incrementToolUseCounts(counts map[string]int, calls []llm.ToolCall) {
 func countActionToolCalls(calls []llm.ToolCall) int {
 	count := 0
 	for _, call := range calls {
-		if !isLifecycleToolName(call.Function) {
+		if countsAgainstActionBudget(call.Function) {
 			count++
 		}
 	}
 	return count
+}
+
+func countsAgainstActionBudget(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	if isLifecycleToolName(trimmed) {
+		return false
+	}
+	switch trimmed {
+	case "skill_select", "skill_fallback":
+		return false
+	default:
+		return true
+	}
 }
 
 func actionToolBudgetReached(strategy TaskStrategy, actionToolsUsed int) bool {
@@ -220,6 +233,10 @@ func lifecycleToolCap(name string) int {
 		// The second call is reserved for an audited correction after live user
 		// steering. The tool itself accepts it only before material effects and
 		// preserves the first proposal as history; further churn is capped.
+		return 2
+	case "skill_select":
+		return 4
+	case "skill_fallback":
 		return 2
 	default:
 		return 0

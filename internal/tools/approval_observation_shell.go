@@ -103,7 +103,11 @@ func observationStmtCommands(stmt *syntax.Stmt, depth int, bindings map[string]s
 		}
 		return append(left, right...), true
 	case *syntax.ForClause:
-		if !loopObservesIteratorWithBindings(cmd, bindings) {
+		if loopHasRemoteObservation(cmd.Do) {
+			if !loopObservesIteratorWithBindings(cmd, bindings) {
+				return nil, false
+			}
+		} else if !loopObservesIteratorWithBindings(cmd, bindings) && !localLoopObservesIteratorWithBindings(cmd, depth, bindings) {
 			return nil, false
 		}
 		iter, ok := cmd.Loop.(*syntax.WordIter)
@@ -130,6 +134,52 @@ func observationStmtCommands(stmt *syntax.Stmt, depth int, bindings map[string]s
 	default:
 		return nil, false
 	}
+}
+
+func localLoopObservesIteratorWithBindings(loop *syntax.ForClause, depth int, outer map[string]string) bool {
+	if loop == nil || loop.Select || stmtsWait(loop.Do) || !finiteLiteralForLoopWithBindings(loop, outer) {
+		return false
+	}
+	iter, ok := loop.Loop.(*syntax.WordIter)
+	if !ok || !iter.InPos.IsValid() || iter.Name == nil || unsafeObservationVarName(iter.Name.Value) || len(iter.Items) == 0 {
+		return false
+	}
+	seenItems := make(map[string]struct{}, len(iter.Items))
+	seenCmdLists := make(map[string]struct{}, len(iter.Items))
+	for _, item := range iter.Items {
+		itemVal, ok := staticObservationWordWithBindings(item, outer)
+		if !ok {
+			return false
+		}
+		if _, dup := seenItems[itemVal]; dup {
+			return false
+		}
+		seenItems[itemVal] = struct{}{}
+		iterBindings := cloneObservationBindings(outer)
+		iterBindings[iter.Name.Value] = itemVal
+		var iterCommands [][]string
+		for _, bodyStmt := range loop.Do {
+			part, ok := observationStmtCommands(bodyStmt, depth+1, iterBindings)
+			if !ok {
+				return false
+			}
+			iterCommands = append(iterCommands, part...)
+		}
+		if len(iterCommands) == 0 {
+			return false
+		}
+		var sig strings.Builder
+		for _, argv := range iterCommands {
+			sig.WriteString(strings.Join(argv, "\x00"))
+			sig.WriteByte('\x01')
+		}
+		key := sig.String()
+		if _, dup := seenCmdLists[key]; dup {
+			return false
+		}
+		seenCmdLists[key] = struct{}{}
+	}
+	return len(seenCmdLists) == len(iter.Items)
 }
 
 // observationShells are the shells whose -c script the bash parser reads

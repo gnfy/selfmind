@@ -639,3 +639,15 @@ func TestUpdatePlanSchemaStatesTheCancellationEvidenceRules(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdatePlanMultipleInProgressErrorNamesConflictingSteps(t *testing.T) {
+	_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+		"plan": []interface{}{
+			map[string]interface{}{"step_id": "step-2", "step": "Second", "status": "in_progress"},
+			map[string]interface{}{"step_id": "step-3", "step": "Third", "status": "in_progress"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only one plan step can be in_progress (found: step-2, step-3)") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

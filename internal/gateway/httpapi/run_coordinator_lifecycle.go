@@ -769,6 +769,9 @@ func (c *RunCoordinator) intentSnapshotWithOffer(ctx context.Context, identity *
 	if c != nil && c.srv != nil && c.srv.Control != nil && identity != nil && run != nil {
 		var frozen persistedApprovalIntent
 		if raw, err := c.srv.Control.RunApprovalIntent(ctx, identity.TenantID, identity.PersonID, run.ID); err == nil && json.Unmarshal(raw, &frozen) == nil && (frozen.Version == 2 || frozen.Version == 3) {
+			if run.ResumesRunID != "" && frozen.Snapshot.AuthorizationParentRunID != run.ResumesRunID {
+				return c.continuationApprovalIntent(ctx, identity, run, frozen.Snapshot)
+			}
 			return frozen.Snapshot
 		}
 	}

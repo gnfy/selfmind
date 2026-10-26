@@ -142,8 +142,9 @@ func (s *Store) applyRunCompletionTx(ctx context.Context, tx *sql.Tx, candidate 
 		if candidate.input.Status != "done" {
 			var kept []verification.Assessment
 			for _, a := range candidate.input.Assessments {
-				if _, singleErr := resolveConditionAssessmentsTx(ctx, tx, candidate.tenant, candidate.runID, []verification.Assessment{a}); singleErr == nil {
-					kept = append(kept, a)
+				trial := append(append([]verification.Assessment(nil), kept...), a)
+				if _, singleErr := resolveConditionAssessmentsTx(ctx, tx, candidate.tenant, candidate.runID, trial); singleErr == nil {
+					kept = trial
 				}
 			}
 			if len(kept) < len(candidate.input.Assessments) {

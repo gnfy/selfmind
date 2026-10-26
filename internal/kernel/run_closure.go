@@ -38,12 +38,15 @@ func (f *finishCorrection) observe(results []toolExecutionResult, counts map[str
 			}
 			f.pending = !result.success && result.effectState == "not_dispatched" &&
 				(result.errorCode == "completion_precondition" || result.errorCode == "condition_assessment_invalid")
+			if f.pending && f.recoveries < maxFinishStateRecoveries && counts["update_plan"] >= lifecycleToolCap("update_plan") {
+				counts["update_plan"] = lifecycleToolCap("update_plan") - 1
+			}
 			continue
 		}
 		if !f.pending || f.recoveries >= maxFinishStateRecoveries || !result.success {
 			continue
 		}
-		changed := result.toolName == "verify"
+		changed := result.toolName == "verify" || (!isLifecycleToolName(result.toolName) && result.toolName != "")
 		if result.toolName == "update_plan" {
 			var state struct {
 				Changed bool `json:"changed"`

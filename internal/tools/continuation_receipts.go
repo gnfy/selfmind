@@ -40,7 +40,10 @@ func CompletedRunToolReceipts(ctx context.Context, store *control.Store, tenantI
 	seen := map[string]bool{}
 	receipts := make([]kernel.PriorToolReceipt, 0, 6)
 	remaining := 3600
+	skillViewCount := 0
+	var lastScanIndex int
 	for i := len(messages) - 1; i >= 0 && len(receipts) < 6 && remaining > 0; i-- {
+		lastScanIndex = i
 		message := messages[i]
 		if message.Role != "tool" || strings.TrimSpace(message.Content) == "" {
 			continue
@@ -73,7 +76,62 @@ func CompletedRunToolReceipts(ctx context.Context, store *control.Store, tenantI
 			Tool: name, Target: textutil.TruncateBytes(RedactSensitive(target), 120),
 			Excerpt: excerpt, Truncated: len(excerpt) < len(content),
 		})
+		if name == "skill_view" {
+			skillViewCount++
+		}
 		remaining -= len(excerpt)
+	}
+	if (len(receipts) == 6 || remaining == 0) && skillViewCount == 0 && lastScanIndex > 0 {
+		for i := lastScanIndex - 1; i >= 0 && skillViewCount < 2; i-- {
+			message := messages[i]
+			if message.Role != "tool" || strings.TrimSpace(message.Content) == "" {
+				continue
+			}
+			origin := calls[message.ToolCallID]
+			name := strings.TrimSpace(message.Name)
+			if name == "" {
+				name = origin.name
+			}
+			if name != "skill_view" {
+				continue
+			}
+			target := origin.target
+			key := name + "\x00" + target
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			content := receiptContent(name, message.Content)
+			content = strings.Join(strings.Fields(RedactSensitive(content)), " ")
+			if content == "" {
+				continue
+			}
+			replaceIdx := -1
+			for idx := len(receipts) - 1; idx >= 0; idx-- {
+				if receipts[idx].Tool != "skill_view" && receipts[idx].Tool != "skill_select" {
+					replaceIdx = idx
+					break
+				}
+			}
+			if replaceIdx < 0 {
+				break
+			}
+			budget := remaining + len(receipts[replaceIdx].Excerpt)
+			limit := 900
+			if limit > budget {
+				limit = budget
+			}
+			if limit <= 0 {
+				break
+			}
+			excerpt := textutil.TruncateBytes(content, limit)
+			remaining = budget - len(excerpt)
+			receipts[replaceIdx] = kernel.PriorToolReceipt{
+				Tool: name, Target: textutil.TruncateBytes(RedactSensitive(target), 120),
+				Excerpt: excerpt, Truncated: len(excerpt) < len(content),
+			}
+			skillViewCount++
+		}
 	}
 	return receipts
 }

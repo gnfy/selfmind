@@ -34,7 +34,13 @@ func assessmentChecks(a Assessment, input []Assessment, checks, allChecks []Chec
 		if len(selected) == 0 && len(a.EvidenceRefs) > 0 && len(a.EvidenceRefs) <= 8 {
 			if _, stepFound := requirements[a.StepID]; stepFound {
 				if resolved, ok := resolveCurrentStepEvidenceRefs(a.EvidenceRefs, allChecks, current); ok {
-					selected = resolved
+					foreign := resolved[0].Binding != nil && resolved[0].Binding.StepID != "" && resolved[0].Binding.StepID != a.StepID
+					if !foreign && a.Result != "met" {
+						foreign = refsClaimedByDifferentStepPeer(a, input)
+					}
+					if !foreign {
+						selected = resolved
+					}
 				}
 			}
 		}
@@ -125,21 +131,70 @@ func narrowStepChecksToCitedSubset(selected []Check, result string, refs []strin
 	if len(subset) == 0 || len(subset) == len(selected) {
 		return selected
 	}
-	citedAcrossSameResult := make(map[string]bool, len(selected))
+	stepID := ""
+	if ValidBinding(selected[0].Binding) {
+		stepID = selected[0].Binding.StepID
+	}
+	citedAcrossFindings := make(map[string]bool, len(selected))
 	for _, peer := range input {
-		if peer.Result != result {
+		if peer.Result != result && (stepID == "" || peer.StepID == "" || peer.StepID == stepID) {
 			continue
 		}
 		for _, ref := range peer.EvidenceRefs {
-			citedAcrossSameResult[ref] = true
+			citedAcrossFindings[ref] = true
 		}
 	}
 	for _, c := range selected {
-		if c.ToolCallID == "" || !citedAcrossSameResult[c.ToolCallID] {
+		if c.ToolCallID == "" || !citedAcrossFindings[c.ToolCallID] {
 			return selected
 		}
 	}
 	return subset
+}
+
+func refsClaimedByDifferentStepPeer(a Assessment, input []Assessment) bool {
+	if a.StepID == "" || len(a.EvidenceRefs) == 0 {
+		return false
+	}
+	claimed := map[string]bool{}
+	for _, peer := range input {
+		if peer.StepID != "" && peer.StepID != a.StepID {
+			for _, ref := range peer.EvidenceRefs {
+				claimed[ref] = true
+			}
+		}
+	}
+	for _, ref := range a.EvidenceRefs {
+		if claimed[ref] {
+			return true
+		}
+	}
+	return false
+}
+
+func allRefsBelongToOtherStepsOrPeers(a Assessment, input []Assessment, checks []Check, current map[string]Check) bool {
+	if a.StepID == "" || len(a.EvidenceRefs) == 0 {
+		return false
+	}
+	claimedByPeer := map[string]bool{}
+	for _, peer := range input {
+		if peer.StepID != "" && peer.StepID != a.StepID && peer.Result == "met" {
+			for _, ref := range peer.EvidenceRefs {
+				claimedByPeer[ref] = true
+			}
+		}
+	}
+	for _, ref := range a.EvidenceRefs {
+		if claimedByPeer[ref] {
+			continue
+		}
+		stepID := resolveRefStepID(ref, checks, current)
+		if stepID != "" && stepID != a.StepID {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func resolveCurrentStepEvidenceRefs(refs []string, checks []Check, current map[string]Check) ([]Check, bool) {
@@ -412,6 +467,20 @@ func isRedundantStepSummary(index int, a Assessment, input []Assessment, checks 
 		return true
 	}
 	if len(a.EvidenceRefs) == 0 {
+		req, ok := requirements[a.StepID]
+		if !ok || req.PositiveRequired {
+			return false
+		}
+		for _, c := range Latest(checks) {
+			if ValidBinding(c.Binding) && c.Binding.StepID == a.StepID {
+				return false
+			}
+		}
+		for j, peer := range input {
+			if j != index && peer.Result == "met" && peer.StepID != a.StepID && (peer.StepID != "" || len(peer.EvidenceRefs) > 0) {
+				return true
+			}
+		}
 		return false
 	}
 	if a.StepID != "" {

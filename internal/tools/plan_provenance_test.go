@@ -63,6 +63,34 @@ func TestUpdatePlanDropsRuntimeOwnedCancellationProvenance(t *testing.T) {
 	}
 }
 
+func TestUpdatePlanNormalizesPlanPatchAlias(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(NewUpdatePlanTool())
+	args := map[string]interface{}{
+		"plan_patch": map[string]interface{}{
+			"completed_step_ids": []interface{}{"step-1"},
+			"current_step_id":    "step-2",
+		},
+	}
+	prepared, err := registry.PrepareToolArguments("update_plan", args)
+	if err != nil {
+		t.Fatalf("PrepareToolArguments failed for plan_patch alias: %v", err)
+	}
+	if _, stillHasPatch := prepared["plan_patch"]; stillHasPatch {
+		t.Fatalf("expected plan_patch to be normalized away, got %#v", prepared)
+	}
+	if mode, _ := prepared["mode"].(string); mode != "patch" {
+		t.Fatalf("expected mode=patch, got %q", mode)
+	}
+	if _, callerMutated := args["plan"]; callerMutated {
+		t.Fatal("PrepareToolArguments must not mutate the caller's argument map")
+	}
+	items, _ := prepared["plan"].([]interface{})
+	if len(items) != 2 {
+		t.Fatalf("expected 2 normalized steps, got %#v", prepared["plan"])
+	}
+}
+
 // handedOverRun starts a Run whose request hands one step to the person and
 // whose plan records that takeover, then parks it waiting for the person.
 func handedOverRun(t *testing.T, store *control.Store, person *control.IdentityContext, options control.StartRunOptions) (*control.Task, *control.Run, string) {

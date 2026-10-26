@@ -57,13 +57,14 @@ func defaultApprovalOptionsForTool(tool string) []ApprovalOption {
 // it owns no timers, IO, or approval lifecycle state (that stays in the gateway
 // per docs/architecture-constraints.md).
 type ApprovalPrompt struct {
-	tool    string
-	target  string // compact object of the action (path/command); may be empty
-	reason  string
-	details ApprovalDetails
-	options []ApprovalOption
-	cursor  int
-	styles  approvalStyles
+	tool            string
+	target          string // compact object of the action (path/command); may be empty
+	reason          string
+	details         ApprovalDetails
+	options         []ApprovalOption
+	cursor          int
+	composerFocused bool
+	styles          approvalStyles
 }
 
 // ApprovalDetails is the decision context the daemon publishes with an approval:
@@ -178,6 +179,14 @@ func (p *ApprovalPrompt) SetParked(parked bool) {
 // IsParked reports whether answering starts a continuation instead of waking
 // the original run.
 func (p *ApprovalPrompt) IsParked() bool { return p != nil && p.details.Parked }
+
+// SetComposerFocused updates the footer hint when keyboard focus moves between
+// the approval panel and the input composer.
+func (p *ApprovalPrompt) SetComposerFocused(focused bool) {
+	if p != nil {
+		p.composerFocused = focused
+	}
+}
 
 // HandleKey processes one key press. It returns the chosen option when the key
 // resolves the prompt (Enter on the highlighted row, or a shortcut key), and
@@ -433,6 +442,9 @@ func (p *ApprovalPrompt) View(width int) string {
 		}
 	}
 	footer := "↑/↓ to move · enter to confirm · esc to cancel"
+	if p.composerFocused {
+		footer = "composer focused · ctrl+g or esc to return"
+	}
 	footer = TruncateMiddle(footer, inner)
 	addRow("")
 	addRow(p.styles.secondary.Render(footer))

@@ -149,7 +149,8 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 		}
 		bound, err := assessmentChecks(assessment, input, checks, allChecks, byID, requirements)
 		if err != nil {
-			if assessment.Version == 0 && assessment.StepID != "" && len(assessment.EvidenceRefs) == 0 &&
+			if assessment.Version == 0 && assessment.StepID != "" &&
+				(len(assessment.EvidenceRefs) == 0 || allRefsBelongToOtherStepsOrPeers(assessment, input, allChecks, byID)) &&
 				(assessment.Result == "unknown" || assessment.Result == "not_met") {
 				if requirement, stepFound := requirements[assessment.StepID]; stepFound {
 					if assessment.Result == "unknown" {
@@ -173,7 +174,7 @@ func ProjectAssessments(runID string, input []Assessment, checks []Check, mutati
 				if unavailable.StepID == "" {
 					selected := ""
 					ambiguous := false
-					for _, check := range checks {
+					for _, check := range allChecks {
 						if check.Source == nil && check.ToolCallID == unavailable.Ref && ValidBinding(check.Binding) {
 							if selected != "" && selected != check.Binding.StepID {
 								ambiguous = true
@@ -340,6 +341,7 @@ func currentEvidenceByID(checks []Check) (map[string]Check, error) {
 }
 
 func CiteableChecks(checks []Check, mutations []Mutation) ([]CiteableEvidence, error) {
+	checks = filterSupersededStaleStepChecks(checks, mutations)
 	byID, err := currentEvidenceByID(checks)
 	if err != nil {
 		return nil, err
@@ -351,7 +353,7 @@ func filterSupersededStaleStepChecks(checks []Check, mutations []Mutation) []Che
 	latest := Latest(checks)
 	affectedAt := func(c Check) int64 { return RelevantMutationAt(c, mutations) }
 	superseded := map[string]bool{}
-	for _, c := range latest {
+	for _, c := range checks {
 		if c.StartedAt < affectedAt(c) && stepCheckSupersededByFreshPass(c, latest, affectedAt) {
 			superseded[checkReference(c, c.ToolCallID)] = true
 		}

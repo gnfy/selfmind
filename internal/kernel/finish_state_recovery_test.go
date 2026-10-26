@@ -59,3 +59,28 @@ func TestFinishUnknownEffectsAndRejectedWorkNeverUnlockRecovery(t *testing.T) {
 		}
 	}
 }
+
+func TestFinishRecoveryUnlocksOnActionToolAndReopensCappedUpdatePlan(t *testing.T) {
+	counts := map[string]int{
+		"finish_run":  1,
+		"update_plan": lifecycleToolCap("update_plan"),
+	}
+	var correction finishCorrection
+	failed := toolExecutionResult{
+		toolName:     "finish_run",
+		errorCode:    "completion_precondition",
+		failurePhase: "preparation",
+		retryability: "after_state_change",
+		effectState:  "not_dispatched",
+	}
+	correction.observe([]toolExecutionResult{failed}, counts)
+	if counts["update_plan"] >= lifecycleToolCap("update_plan") {
+		t.Fatalf("expected capped update_plan to reopen one recovery slot on pending finish correction, got %d", counts["update_plan"])
+	}
+	// A successful non-lifecycle observation/mutation tool (e.g. read_file, terminal)
+	// produces new evidence and unlocks finish_run so the model can finish with inline plan_patch.
+	correction.observe([]toolExecutionResult{{toolName: "read_file", success: true}}, counts)
+	if counts["finish_run"] != 0 {
+		t.Fatalf("expected successful non-lifecycle tool to unlock finish_run recovery, got counts=%v", counts)
+	}
+}

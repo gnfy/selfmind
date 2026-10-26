@@ -255,6 +255,17 @@ func (t *SkillLifecycleManageTool) promoteCandidate(args map[string]interface{},
 			return "", fmt.Errorf("parentless Skill candidate cannot replace active version %s", active.VersionHash)
 		}
 	} else {
+		if active == nil {
+			if info, current, _, findErr := ReadSkillPayloadForTenant(tenantID, version.SkillName, "", args); findErr == nil {
+				currentHash := sha256.Sum256([]byte(current))
+				currentVersionHash := fmt.Sprintf("%x", currentHash[:])
+				if key, keyErr := resolvedSkillKey(tenantID, info); keyErr == nil && key == version.SkillKey && currentVersionHash == version.ParentVersionHash {
+					if err := t.store.EnsureActiveSkillVersion(ContextFromArgs(args), tenantID, version.SkillKey, info.Name, currentVersionHash, skillMainFilePath(info), current); err == nil {
+						active, _ = t.store.ActiveSkillVersion(ContextFromArgs(args), tenantID, version.SkillKey)
+					}
+				}
+			}
+		}
 		if active == nil || active.VersionHash != version.ParentVersionHash {
 			return "", fmt.Errorf("skill candidate parent %s is not the current active version", version.ParentVersionHash)
 		}

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"selfmind/internal/control"
@@ -22,7 +23,23 @@ var runtimeOwnedPlanStepFields = []string{"cancellation_quote_source", "cancella
 // A complete snapshot echoed from an earlier result then proceeds, and nothing
 // a model supplies there reaches the plan: the runtime records the provenance
 // of each quote itself.
+// It also normalizes the high-frequency `plan_patch` top-level alias into
+// `mode: "patch"` + `plan: [...]` without mutating the caller's argument map.
 func (t *PlanTool) NormalizeArguments(args map[string]interface{}) (map[string]interface{}, error) {
+	if args["plan"] == nil && args["plan_patch"] != nil {
+		if patchedPlan, ok := normalizePlanPatchAlias(args["plan_patch"]); ok {
+			cloned := make(map[string]interface{}, len(args)+1)
+			for key, value := range args {
+				cloned[key] = value
+			}
+			delete(cloned, "plan_patch")
+			cloned["plan"] = patchedPlan
+			if mode, _ := cloned["mode"].(string); strings.TrimSpace(mode) == "" {
+				cloned["mode"] = "patch"
+			}
+			args = cloned
+		}
+	}
 	coerced, err := coerceValue("plan", args["plan"], "array")
 	items, ok := coerced.([]interface{})
 	if err != nil || !ok {
@@ -63,6 +80,51 @@ func (t *PlanTool) NormalizeArguments(args map[string]interface{}) (map[string]i
 	}
 	out["plan"] = plan
 	return out, nil
+}
+
+func normalizePlanPatchAlias(raw interface{}) ([]interface{}, bool) {
+	if coerced, err := coerceValue("plan_patch", raw, "array"); err == nil {
+		if items, ok := coerced.([]interface{}); ok && len(items) > 0 {
+			return items, true
+		}
+	}
+	coercedObj, err := coerceValue("plan_patch", raw, "object")
+	if err != nil {
+		return nil, false
+	}
+	obj, ok := coercedObj.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	var steps []interface{}
+	if rawSteps, exists := obj["steps"]; exists {
+		if coercedSteps, stepErr := coerceValue("steps", rawSteps, "array"); stepErr == nil {
+			if items, ok := coercedSteps.([]interface{}); ok {
+				steps = append(steps, items...)
+			}
+		}
+	}
+	if rawCompleted, exists := obj["completed_step_ids"]; exists {
+		if coercedIDs, idErr := coerceValue("completed_step_ids", rawCompleted, "array"); idErr == nil {
+			if ids, ok := coercedIDs.([]interface{}); ok {
+				for _, rawID := range ids {
+					if id, ok := rawID.(string); ok && strings.TrimSpace(id) != "" {
+						steps = append(steps, map[string]interface{}{
+							"step_id": strings.TrimSpace(id),
+							"status":  "completed",
+						})
+					}
+				}
+			}
+		}
+	}
+	if currentID, ok := obj["current_step_id"].(string); ok && strings.TrimSpace(currentID) != "" {
+		steps = append(steps, map[string]interface{}{
+			"step_id": strings.TrimSpace(currentID),
+			"status":  "in_progress",
+		})
+	}
+	return steps, len(steps) > 0
 }
 
 // PlanQuoteOrigins describes, per recorded quote source on runID's plan, the

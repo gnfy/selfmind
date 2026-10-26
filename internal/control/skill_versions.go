@@ -190,6 +190,33 @@ func (s *Store) ActiveSkillVersion(ctx context.Context, tenantID, skillKey strin
 	return version, err
 }
 
+// EnsureActiveSkillVersion reconciles an existing on-disk Skill into
+// skill_versions as 'active' when no active row exists yet for that skill_key,
+// so PATCH candidates against pre-existing on-disk Skills can be staged,
+// promoted, and rolled back cleanly.
+func (s *Store) EnsureActiveSkillVersion(ctx context.Context, tenantID, skillKey, skillName, versionHash, contentRef, contentBody string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("control store is required")
+	}
+	existing, err := s.ActiveSkillVersion(ctx, tenantID, skillKey)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return nil
+	}
+	now := time.Now().Unix()
+	_, err = s.db.ExecContext(ctx, `INSERT INTO skill_versions
+		(control_tenant_id, skill_key, skill_name, version_hash, state, content_ref, content_body,
+		 package_hash, resource_manifest_json, created_by, created_at, promoted_at)
+		VALUES(?,?,?,?, 'active', ?,?,'','[]','external_reconcile',?,?)
+		ON CONFLICT(control_tenant_id, skill_key, version_hash) DO UPDATE SET
+		 skill_name=excluded.skill_name, state='active', content_ref=excluded.content_ref,
+		 content_body=excluded.content_body, promoted_at=COALESCE(skill_versions.promoted_at, excluded.promoted_at)`,
+		normalizeTenant(tenantID), skillKey, skillName, versionHash, strings.TrimSpace(contentRef), contentBody, now, now)
+	return err
+}
+
 func scanSkillVersion(row skillLifecycleScanner) (*SkillVersion, error) {
 	var version SkillVersion
 	var manifest, observations, evidence string

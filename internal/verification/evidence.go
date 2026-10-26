@@ -215,7 +215,7 @@ func Latest(checks []Check) []Check {
 						existing.FinishedAt > 0 && existing.FinishedAt <= c.StartedAt &&
 						(unresolvedFixed ||
 							(existing.Binding.Criterion == c.Binding.Criterion &&
-								existing.Binding.Target == c.Binding.Target &&
+								(existing.Binding.Target == c.Binding.Target || (existing.Status != "succeeded" && c.Binding.StepID != "" && targetCovers(c.Binding.Target, existing.Binding.Target))) &&
 								(existing.Status != "succeeded" || (c.Binding.StepID != "" && existingDeps == dependencies)))) {
 						delete(latest, existingKey)
 					}
@@ -249,6 +249,25 @@ func checkReference(check Check, id string) string {
 		return check.Source.RunID + "\x00" + id
 	}
 	return "\x00" + id
+}
+
+func targetCovers(broad, narrow string) bool {
+	broad = strings.TrimSpace(broad)
+	narrow = strings.TrimSpace(narrow)
+	if broad == "" || narrow == "" {
+		return false
+	}
+	if broad == narrow {
+		return true
+	}
+	for _, part := range strings.FieldsFunc(broad, func(r rune) bool {
+		return r == '+' || r == ',' || r == ';'
+	}) {
+		if strings.TrimSpace(part) == narrow {
+			return true
+		}
+	}
+	return false
 }
 
 func State(latestMutation int64, checks []Check) (string, string) {

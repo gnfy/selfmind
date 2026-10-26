@@ -242,7 +242,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	if mode == "patch" && projection == nil {
 		return "", fmt.Errorf("patch mode requires a durable current Run Plan")
 	}
-	inProgress := 0
+	var inProgressSteps []string
 	for i := range steps {
 		steps[i].Step = strings.TrimSpace(steps[i].Step)
 		steps[i].Status = strings.TrimSpace(steps[i].Status)
@@ -257,11 +257,18 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			return "", fmt.Errorf("plan[%d].status must be pending, in_progress, completed, or cancelled", i)
 		}
 		if steps[i].Status == "in_progress" {
-			inProgress++
+			label := strings.TrimSpace(steps[i].StepID)
+			if label == "" {
+				label = steps[i].Step
+			}
+			if label == "" {
+				label = fmt.Sprintf("plan[%d]", i)
+			}
+			inProgressSteps = append(inProgressSteps, label)
 		}
 	}
-	if inProgress > 1 {
-		return "", fmt.Errorf("only one plan step can be in_progress")
+	if len(inProgressSteps) > 1 {
+		return "", fmt.Errorf("only one plan step can be in_progress (found: %s)", strings.Join(inProgressSteps, ", "))
 	}
 
 	state := PlanState{

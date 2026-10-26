@@ -30,3 +30,25 @@ func TestBatchUsesEarnedBudgetBeforeRefusingItsSibling(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillBindingDoesNotConsumeActionToolBudget(t *testing.T) {
+	if countsAgainstActionBudget("skill_select") || countsAgainstActionBudget("skill_fallback") {
+		t.Fatal("skill binding tools must not consume action tool budget")
+	}
+	if lifecycleToolCap("skill_select") != 4 || lifecycleToolCap("skill_fallback") != 2 {
+		t.Fatalf("unexpected caps: skill_select=%d skill_fallback=%d", lifecycleToolCap("skill_select"), lifecycleToolCap("skill_fallback"))
+	}
+	s := DefaultTaskStrategy()
+	s.MaxActionTools = 1
+	calls := []llm.ToolCall{
+		{ID: "1", Function: "skill_select", Args: `{"name":"s"}`},
+		{ID: "2", Function: "read_file", Args: `{"path":"a"}`},
+	}
+	admitted, dropped := filterToolCallsByStrategyAndBudget(calls, s, 0)
+	if dropped != 0 || len(admitted) != 2 {
+		t.Fatalf("admitted=%d dropped=%d; skill_select should not displace the action tool", len(admitted), dropped)
+	}
+	if got := countActionToolCalls(admitted); got != 1 {
+		t.Fatalf("countActionToolCalls = %d, want 1", got)
+	}
+}

@@ -1132,11 +1132,25 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// An active approval panel captures every key. Esc and Ctrl+C explicitly
-	// reject the current request; stray keys must not leak into the composer.
+	// An active approval panel captures every key by default. Esc and Ctrl+C
+	// explicitly reject the current request; Ctrl+G (or Shift+Tab) toggles
+	// keyboard focus between the approval panel and the composer so the person
+	// can draft or run local commands without dismissing the pending approval.
 	if m.approvalPrompt != nil {
-		if cmd, handled := m.handleApprovalPromptKey(msg); handled {
-			return m, cmd
+		if key := msg.String(); key == "ctrl+g" || key == "shift+tab" {
+			m.approvalComposerFocused = !m.approvalComposerFocused
+			m.approvalPrompt.SetComposerFocused(m.approvalComposerFocused)
+			if m.approvalComposerFocused {
+				id := m.setStatusNotice(noticeInfo, "Composer focused — press Ctrl+G to return to approval prompt.")
+				return m, clearStatusNoticeAfter(id, 2500*time.Millisecond)
+			}
+			id := m.setStatusNotice(noticeInfo, "Approval prompt focused.")
+			return m, clearStatusNoticeAfter(id, 1500*time.Millisecond)
+		}
+		if !m.approvalComposerFocused {
+			if cmd, handled := m.handleApprovalPromptKey(msg); handled {
+				return m, cmd
+			}
 		}
 	}
 	// The trust question owns the keyboard while armed, for the same reason:
@@ -1184,6 +1198,12 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if result := m.editor.HandleKey(msg); result.Handled() {
 				return m, result.Cmd
 			}
+			if m.approvalPrompt != nil && m.approvalComposerFocused {
+				m.approvalComposerFocused = false
+				m.approvalPrompt.SetComposerFocused(false)
+				id := m.setStatusNotice(noticeInfo, "Approval prompt focused.")
+				return m, clearStatusNoticeAfter(id, 1500*time.Millisecond)
+			}
 			return m, nil
 		case "ctrl+c":
 			// Priority 1: if input has content, clear it (don't quit)
@@ -1223,6 +1243,12 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// preview is read, so history stores the canonical completed command.
 			if result := m.editor.HandleKey(msg); result.Action != components.ComposerActionSubmit {
 				return m, result.Cmd
+			}
+			if m.approvalPrompt != nil && m.approvalComposerFocused {
+				m.approvalComposerFocused = false
+				m.approvalPrompt.SetComposerFocused(false)
+				id := m.setStatusNotice(noticeInfo, "Draft kept in composer — answer the approval prompt first.")
+				return m, clearStatusNoticeAfter(id, 2000*time.Millisecond)
 			}
 			// Ctrl+J is handled above via KeyCtrlJ.
 			// Here plain Enter submits

@@ -22,7 +22,7 @@ func releaseHeldToolReservations(calls []llm.ToolCall, results []toolExecutionRe
 		}
 		name := strings.TrimSpace(calls[i].Function)
 		counts[name] = max(0, counts[name]-1)
-		if !isLifecycleToolName(name) {
+		if countsAgainstActionBudget(name) {
 			actions++
 		}
 	}

@@ -1,11 +1,13 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"selfmind/internal/control"
 	"selfmind/internal/kernel"
 )
 
@@ -288,5 +290,92 @@ func TestManagedSkillDescriptionLimitsCharactersAndBytes(t *testing.T) {
 	tooManyBytes := ensureFrontMatter("body", "long-bytes", strings.Repeat("界", SkillDescriptionMaxBytes/3+1))
 	if err := ValidateManagedSkillDescription(tooManyBytes); err == nil || !strings.Contains(err.Error(), "UTF-8 bytes") {
 		t.Fatalf("byte ceiling not enforced: %v", err)
+	}
+}
+
+func TestSkillManageTool_CandidateOnlyStagesAndPromotesWithStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	manageTool := NewSkillManageTool(store)
+	lifecycleTool := NewSkillLifecycleManageTool(store)
+	candidateScope := kernel.ToolInvocationScope{
+		ControlTenantID:   "default",
+		SkillMutationMode: kernel.SkillMutationCandidateOnly,
+	}
+	directScope := kernel.ToolInvocationScope{
+		ControlTenantID:   "default",
+		SkillMutationMode: kernel.SkillMutationDirect,
+	}
+
+	out, err := manageTool.Execute(map[string]interface{}{
+		"action":            "create",
+		"name":              "staged-workflow",
+		"description":       "Repeatable release verification workflow",
+		"content":           "Step 1: Inspect the manifest.\nStep 2: Run the verification suite.",
+		"_context":          ctx,
+		"_invocation_scope": candidateScope,
+	})
+	if err != nil {
+		t.Fatalf("candidate staging failed: %v", err)
+	}
+	if !strings.Contains(out, "mode=candidate_only") {
+		t.Fatalf("expected candidate_only staging confirmation, got %q", out)
+	}
+	if _, findErr := findSkill("default", "staged-workflow"); findErr == nil {
+		t.Fatal("candidate_only staging must not write an active skill to disk before promotion")
+	}
+	candidates, err := store.ListSkillVersions(ctx, "default", "", "candidate", 10)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("expected 1 staged candidate, got %d (err=%v)", len(candidates), err)
+	}
+	if _, err := lifecycleTool.Execute(map[string]interface{}{
+		"action":            "candidate_promote",
+		"version_hash":      candidates[0].VersionHash,
+		"_context":          ctx,
+		"_invocation_scope": directScope,
+	}); err != nil {
+		t.Fatalf("promoting staged candidate failed: %v", err)
+	}
+
+	patchOut, err := manageTool.Execute(map[string]interface{}{
+		"action":            "patch",
+		"name":              "staged-workflow",
+		"old_text":          "Step 2: Run the verification suite.",
+		"new_text":          "Step 2: Run the targeted verification suite and cite output.",
+		"_context":          ctx,
+		"_invocation_scope": candidateScope,
+	})
+	if err != nil {
+		t.Fatalf("candidate patch staging failed: %v", err)
+	}
+	if !strings.Contains(patchOut, "mode=candidate_only") {
+		t.Fatalf("expected candidate_only patch staging confirmation, got %q", patchOut)
+	}
+	patchCandidates, err := store.ListSkillVersions(ctx, "default", "", "candidate", 10)
+	if err != nil || len(patchCandidates) != 1 {
+		t.Fatalf("expected 1 staged patch candidate, got %d (err=%v)", len(patchCandidates), err)
+	}
+	if _, err := lifecycleTool.Execute(map[string]interface{}{
+		"action":            "candidate_promote",
+		"version_hash":      patchCandidates[0].VersionHash,
+		"_context":          ctx,
+		"_invocation_scope": directScope,
+	}); err != nil {
+		t.Fatalf("promoting staged patch candidate failed: %v", err)
+	}
+	readBody, err := manageTool.Execute(map[string]interface{}{
+		"action":            "read",
+		"name":              "staged-workflow",
+		"_context":          ctx,
+		"_invocation_scope": candidateScope,
+	})
+	if err != nil || !strings.Contains(readBody, "cite output") {
+		t.Fatalf("expected promoted patch in active skill, got %q (err=%v)", readBody, err)
 	}
 }

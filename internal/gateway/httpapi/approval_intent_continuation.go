@@ -7,6 +7,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
+	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 )
 
@@ -46,6 +47,25 @@ func (c *RunCoordinator) continuationApprovalIntentAtDepth(ctx context.Context, 
 		parent = c.continuationApprovalIntentAtDepth(ctx, identity, parentRun, parent, depth+1)
 	}
 	snapshot.AuthorizationParentRunID = parentRun.ID
+	if (strings.TrimSpace(snapshot.GoalSummary) == "" || strings.TrimSpace(snapshot.GoalSummary) == strings.TrimSpace(snapshot.RawUserText)) && strings.TrimSpace(parent.GoalSummary) != "" {
+		snapshot.GoalSummary = parent.GoalSummary
+	}
+	if snapshot.UserAuthored() && strings.TrimSpace(snapshot.PriorAssistantOffer) == "" {
+		if handoff, err := c.srv.Control.RunHandoff(ctx, identity.TenantID, identity.PersonID, parentRun.ID); err == nil && handoff != nil {
+			parts := make([]string, 0, 1+len(handoff.NextSteps))
+			if s := strings.TrimSpace(handoff.Summary); s != "" {
+				parts = append(parts, s)
+			}
+			for _, step := range handoff.NextSteps {
+				if s := strings.TrimSpace(step); s != "" {
+					parts = append(parts, s)
+				}
+			}
+			if offer := strings.Join(parts, "\n"); offer != "" {
+				snapshot.PriorAssistantOffer = textutil.TruncateBytes(tools.RedactSensitive(offer), 1200)
+			}
+		}
+	}
 	snapshot = appendUniqueProhibitions(snapshot, parent.ExplicitDeny, parent.DenyScopes)
 	snapshot.AuthorizationEvidence = append([]tools.AuthorizationEvidence(nil), parent.AuthorizationEvidence...)
 	snapshot.AuthorizationEvidenceIncomplete = snapshot.AuthorizationEvidenceIncomplete || parent.AuthorizationEvidenceIncomplete

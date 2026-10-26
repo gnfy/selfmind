@@ -187,3 +187,45 @@ func TestWatcherEvidenceIncludesParentClaimedAfterRunStart(t *testing.T) {
 		t.Fatalf("post-start parent claim lost its authorization history: %+v", got)
 	}
 }
+
+func TestUserContinuationInheritsParentGoalSummaryAndHandoffOffer(t *testing.T) {
+	d, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	parent, err := store.StartRun(ctx, task, "cli", "Full multi-phase goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentIntent := runIntentSnapshot(api.MessageRequest{Content: "Full multi-phase goal"}, task, parent, nil)
+	parentIntent.GoalSummary = "Full multi-phase goal"
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: parent.ID, Type: "run.started", Payload: mustJSON(map[string]interface{}{"approval_intent": persistedApprovalIntent{Version: 3, Snapshot: parentIntent}})}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveHandoff(ctx, control.Handoff{
+		TaskID:    task.ID,
+		RunID:     parent.ID,
+		Summary:   "Phase 1 ready for approval.",
+		NextSteps: []string{"Execute Phase 2 implementation"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, parent.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	childTask, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "好的，开始", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.StartRun(ctx, childTask, "cli", "好的，开始")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.ResumesRunID = parent.ID
+	childIntent := runIntentSnapshot(api.MessageRequest{Content: "好的，开始"}, childTask, child, nil)
+	got := d.coordinator().continuationApprovalIntent(ctx, identity, child, childIntent)
+	if got.GoalSummary != "Full multi-phase goal" {
+		t.Fatalf("GoalSummary = %q, want parent GoalSummary", got.GoalSummary)
+	}
+	if !strings.Contains(got.PriorAssistantOffer, "Phase 1 ready for approval.") || !strings.Contains(got.PriorAssistantOffer, "Execute Phase 2 implementation") {
+		t.Fatalf("PriorAssistantOffer = %q, want parent handoff offer", got.PriorAssistantOffer)
+	}
+}

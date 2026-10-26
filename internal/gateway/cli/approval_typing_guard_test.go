@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"selfmind/internal/tools"
 )
 
@@ -144,5 +145,58 @@ func TestEscalatedTriageStateShowsNoUnavailableNotice(t *testing.T) {
 
 	if view := model.approvalPrompt.View(100); strings.Contains(view, "automatic triage unavailable") {
 		t.Fatalf("escalation must not claim triage was unavailable:\n%s", view)
+	}
+}
+
+func TestApprovalPromptCtrlGTogglesComposerFocusWithoutCancelling(t *testing.T) {
+	model, calls := newApprovalTestModel()
+	model.lastInputActivityAt = time.Time{}
+
+	updated, _ := model.Update(sampleApproval("apr_focus"))
+	model = updated.(*uiModel)
+	if model.approvalPrompt == nil || model.approvalComposerFocused {
+		t.Fatal("panel should be armed and focused by default")
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	model = updated.(*uiModel)
+	if model.approvalPrompt == nil || !model.approvalComposerFocused {
+		t.Fatal("ctrl+g should focus composer while keeping approval prompt armed")
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("toggling focus must not resolve or cancel approval: %v", *calls)
+	}
+
+	updated, _ = model.Update(keyRunes("draft"))
+	model = updated.(*uiModel)
+	if model.approvalPrompt == nil || len(*calls) != 0 {
+		t.Fatal("typing while composer is focused must not trigger approval decision")
+	}
+	if got := model.editor.Value(); got != "draft" {
+		t.Fatalf("editor value = %q, want %q", got, "draft")
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	model = updated.(*uiModel)
+	if model.approvalComposerFocused {
+		t.Fatal("second ctrl+g should return focus to approval prompt")
+	}
+
+	// Focusing composer again and pressing Enter keeps the draft intact and returns focus to approval prompt.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	model = updated.(*uiModel)
+	if !strings.Contains(model.approvalPrompt.View(100), "composer focused") {
+		t.Fatalf("expected composer focused footer in approval prompt view:\n%s", model.approvalPrompt.View(100))
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*uiModel)
+	if model.approvalComposerFocused {
+		t.Fatal("enter in composer focus while approval is pending should return focus to approval prompt")
+	}
+	if got := model.editor.Value(); got != "draft" {
+		t.Fatalf("draft should be preserved after enter, got %q", got)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("enter in composer focus must not answer approval: %v", *calls)
 	}
 }

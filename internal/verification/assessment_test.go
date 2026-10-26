@@ -265,3 +265,89 @@ func TestUnusableObservationCausesAreTypedAndBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestSinglePathTargetInfersLocalDependencyAndMultiCheckSupersession(t *testing.T) {
+	// 1. Single-path Target with "/" infers LocalDependencies=[Target] when LocalDependencies==nil.
+	checkPathTarget := observedAssessmentCheck("check-plan-json", "step-2", "cicd/.release/RUQX-1434-plan.json", 0)
+	checkPathTarget.StartedAt = 10
+	checkPathTarget.FinishedAt = 11
+
+	// Mutation to unrelated file /workspace/docs/report.md at t=20 must NOT mark checkPathTarget stale.
+	mutations := []Mutation{{Path: "/workspace/docs/report.md", FinishedAt: 20}}
+	if rel := RelevantMutationAt(checkPathTarget, mutations); rel != 0 {
+		t.Fatalf("expected single-path target check to ignore unrelated file mutation, got RelevantMutationAt=%d", rel)
+	}
+
+	// 2. Multiple stale checks sharing a Latest key (check-7, check-9) superseded by a fresh pass (check-28)
+	// must NOT resurrect check-7 when filterSupersededStaleStepChecks runs.
+	stale1 := observedAssessmentCheck("check-7", "step-1", "step-1", 0)
+	stale1.StartedAt = 10
+	stale1.FinishedAt = 11
+	stale2 := observedAssessmentCheck("check-9", "step-1", "step-1", 0)
+	stale2.StartedAt = 12
+	stale2.FinishedAt = 13
+
+	freshDeps := []string{"/workspace/out.json"}
+	fresh := observedAssessmentCheck("check-28", "step-1", "verify_out", 0)
+	fresh.StartedAt = 30
+	fresh.FinishedAt = 31
+	fresh.Binding.LocalDependencies = &freshDeps
+
+	requirements := map[string]AssessmentRequirement{
+		"step-1": {Criterion: "value is ready", PositiveRequired: true},
+		"step-2": {Criterion: "value is ready", PositiveRequired: false},
+	}
+	p, err := ProjectAssessments(
+		"run",
+		[]Assessment{
+			{StepID: "step-1", Result: "met", EvidenceRefs: []string{"check-28"}, Reason: "Fresh verification passed."},
+			{StepID: "step-2", Result: "met", EvidenceRefs: []string{"check-plan-json"}, Reason: "Plan JSON verified."},
+		},
+		[]Check{stale1, stale2, fresh, checkPathTarget},
+		mutations,
+		requirements,
+	)
+	if err != nil {
+		t.Fatalf("ProjectAssessments failed: %v", err)
+	}
+	if !p.ReviewComplete || len(p.Blockers) != 0 {
+		t.Fatalf("expected ReviewComplete with 0 blockers, got %+v", p)
+	}
+
+	// 3. StateWithMutations supersedes an earlier failed check on a narrower target when a later
+	// passing check on the same step & criterion covers that target.
+	failedNarrow := observedAssessmentCheck("check-narrow", "step-1", "apps/agent/package.json", 1)
+	failedNarrow.StartedAt = 10
+	failedNarrow.FinishedAt = 11
+	passedBroad := observedAssessmentCheck("check-broad", "step-1", "apps/agent/package.json + apps/web/package.json", 0)
+	passedBroad.StartedAt = 12
+	passedBroad.FinishedAt = 13
+	if state, summary := StateWithMutations(nil, []Check{failedNarrow, passedBroad}); state != "passed" {
+		t.Fatalf("expected StateWithMutations to return passed after covering check, got %q (%s)", state, summary)
+	}
+}
+
+func TestCrossStepNotMetAssessmentCitingCompletedStepEvidenceDoesNotCollide(t *testing.T) {
+	c1 := observedAssessmentCheck("check-14", "step-3", "target-a", 0)
+	c2 := observedAssessmentCheck("check-15", "step-3", "target-b", 0)
+	requirements := map[string]AssessmentRequirement{
+		"step-3": {Criterion: "value is ready", PositiveRequired: true},
+		"step-4": {Criterion: "awaiting confirmation", PositiveRequired: true},
+	}
+	p, err := ProjectAssessments(
+		"run",
+		[]Assessment{
+			{StepID: "step-3", Result: "met", EvidenceRefs: []string{"check-14"}, Reason: "Step 3 check A passed."},
+			{StepID: "step-4", Result: "not_met", EvidenceRefs: []string{"check-14", "check-15"}, Reason: "Step 4 blocked awaiting human confirmation."},
+		},
+		[]Check{c1, c2},
+		nil,
+		requirements,
+	)
+	if err != nil {
+		t.Fatalf("expected cross-step not_met citing completed step evidence not to fail, got: %v", err)
+	}
+	if p.State != "not_met" || len(p.Blockers) == 0 {
+		t.Fatalf("expected not_met projection with blocker for step-4, got %+v", p)
+	}
+}

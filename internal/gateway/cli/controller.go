@@ -255,8 +255,9 @@ type uiModel struct {
 	// Interactive approval panel state (see approval_flow.go). approvalPrompt is
 	// the active panel; approvalQueue holds requests that arrived while one was
 	// already up (FIFO re-arm).
-	approvalPrompt *components.ApprovalPrompt
-	approvalQueue  []MsgApprovalRequest
+	approvalPrompt          *components.ApprovalPrompt
+	approvalComposerFocused bool
+	approvalQueue           []MsgApprovalRequest
 	// delayedApprovals hold requests that arrived while the person was typing;
 	// they are armed once input goes idle (approvalTypingIdleDelay) so a panel
 	// cannot swallow an in-flight keystroke as a decision.
@@ -373,6 +374,10 @@ type MsgApprovalRequest struct {
 	Delegated bool
 	// Channel is the session whose run asks. Only that session arms the panel.
 	Channel string
+	// RunID and TaskID optionally identify the originating run/task for
+	// multi-endpoint and background approval observability.
+	RunID  string
+	TaskID string
 }
 
 // MsgApprovalResolved closes a matching approval panel or queued request when

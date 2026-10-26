@@ -1,8 +1,11 @@
 package tools
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -140,13 +143,15 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 	fileContent, _ := args["file_content"].(string)
 	source, _ := args["source"].(string)
 	changeID, _ := args["change_id"].(string)
+	tenantID := skillStorageTenantID(args)
 	if skillMutationAction(action) {
+		if t.store != nil && isCandidateStageableSkillAction(action, filePath) && skillMutationModeFromArgs(args) == kernel.SkillMutationCandidateOnly {
+			return t.stageSkillCandidate(tenantID, action, name, content, description, oldText, newText, replaceAll, args)
+		}
 		if err := authorizeSkillMutation(args, action); err != nil {
 			return "", err
 		}
 	}
-
-	tenantID := skillStorageTenantID(args)
 
 	switch action {
 	case "list":
@@ -401,6 +406,160 @@ func authorizeSkillMutation(args map[string]interface{}, action string) error {
 		mode = "unknown:" + mode
 	}
 	return fmt.Errorf("skill mutation %q is not allowed for this invocation (mode=%s)", action, mode)
+}
+
+func skillMutationModeFromArgs(args map[string]interface{}) string {
+	mode := kernel.SkillMutationNone
+	if scope, ok := InvocationScopeFromArgs(args); ok && strings.TrimSpace(scope.SkillMutationMode) != "" {
+		mode = strings.TrimSpace(scope.SkillMutationMode)
+	}
+	return mode
+}
+
+func isCandidateStageableSkillAction(action, filePath string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "create", "update", "edit":
+		return true
+	case "patch":
+		return strings.TrimSpace(filePath) == ""
+	default:
+		return false
+	}
+}
+
+func (t *SkillManageTool) stageSkillCandidate(tenantID, action, name, content, description, oldText, newText string, replaceAll bool, args map[string]interface{}) (string, error) {
+	action = strings.ToLower(strings.TrimSpace(action))
+	switch action {
+	case "create":
+		if strings.TrimSpace(name) == "" {
+			return "", fmt.Errorf("name is required for create")
+		}
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("content is required for create")
+		}
+		writeRoot, err := ResolveWritableSkillRootForTenant(tenantID, args)
+		if err != nil {
+			return "", err
+		}
+		safeName := kernel.SanitizeSkillName(name)
+		skillDir := filepath.Join(writeRoot.Path, safeName)
+		if _, err := os.Stat(skillDir); err == nil {
+			return "", fmt.Errorf("skill %q already exists; use patch or edit instead", name)
+		}
+		if _, err := os.Stat(filepath.Join(writeRoot.Path, safeName+".md")); err == nil {
+			return "", fmt.Errorf("legacy skill %q already exists; use patch or edit instead", name)
+		}
+		candidateContent := ensureFrontMatter(content, safeName, description)
+		if err := ValidateManagedSkillDescription(candidateContent); err != nil {
+			return "", err
+		}
+		if err := validateSkillEnvironmentDeclarations(candidateContent); err != nil {
+			return "", err
+		}
+		if err := kernel.ScanSkillForDangers(candidateContent); err != nil {
+			return "", fmt.Errorf("security scan failed: %w", err)
+		}
+		skillKey := control.SkillKey(tenantID, safeName, writeRoot.Scope, SkillSourceAgentCreated, writeRoot.Path, safeName+"/SKILL.md")
+		digest := sha256.Sum256([]byte(candidateContent))
+		evidenceHash := fmt.Sprintf("skill_manage:%s:%s:%x", action, safeName, digest[:8])
+		versionHash, err := t.store.CreateSkillCandidateVersion(ContextFromArgs(args), tenantID, skillKey, safeName, "", candidateContent, evidenceHash, nil, map[string]string{
+			"source": "skill_manage",
+			"action": action,
+		})
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Skill candidate %s@%s staged (mode=candidate_only); review or promote with /skills promote %s.", safeName, versionHash, versionHash), nil
+	case "update", "edit":
+		if strings.TrimSpace(name) == "" {
+			return "", fmt.Errorf("name is required for edit")
+		}
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("content is required for edit")
+		}
+		info, current, _, err := ReadSkillPayloadForTenant(tenantID, name, "", args)
+		if err != nil {
+			return "", err
+		}
+		if err := ensureSkillEditAuthorized(info, "editing it", args); err != nil {
+			return "", err
+		}
+		candidateContent := ensureFrontMatter(content, info.Name, description)
+		if err := ValidateManagedSkillDescription(candidateContent); err != nil {
+			return "", err
+		}
+		if err := validateSkillEnvironmentDeclarations(candidateContent); err != nil {
+			return "", err
+		}
+		if err := kernel.ScanSkillForDangers(candidateContent); err != nil {
+			return "", fmt.Errorf("security scan failed: %w", err)
+		}
+		skillKey, err := resolvedSkillKey(tenantID, info)
+		if err != nil {
+			return "", err
+		}
+		parentDigest := sha256.Sum256([]byte(current))
+		parentVersionHash := fmt.Sprintf("%x", parentDigest[:])
+		_ = t.store.EnsureActiveSkillVersion(ContextFromArgs(args), tenantID, skillKey, info.Name, parentVersionHash, skillMainFilePath(info), current)
+		digest := sha256.Sum256([]byte(candidateContent))
+		evidenceHash := fmt.Sprintf("skill_manage:%s:%s:%x", action, info.Name, digest[:8])
+		versionHash, err := t.store.CreateSkillCandidateVersion(ContextFromArgs(args), tenantID, skillKey, info.Name, parentVersionHash, candidateContent, evidenceHash, nil, map[string]string{
+			"source": "skill_manage",
+			"action": action,
+		})
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Skill candidate %s@%s staged (mode=candidate_only, parent=%s); review or promote with /skills promote %s.", info.Name, versionHash, parentVersionHash, versionHash), nil
+	case "patch":
+		if strings.TrimSpace(name) == "" {
+			return "", fmt.Errorf("name is required for patch")
+		}
+		if oldText == "" {
+			return "", fmt.Errorf("old_text is required for patch")
+		}
+		info, current, _, err := ReadSkillPayloadForTenant(tenantID, name, "", args)
+		if err != nil {
+			return "", err
+		}
+		if err := ensureWritableSkill(info, "patching it"); err != nil {
+			return "", err
+		}
+		target := skillMainFilePath(info)
+		updated, matches, strategy, err := fuzzyReplace(current, oldText, newText, replaceAll)
+		if err != nil {
+			return "", fmt.Errorf("%w\n\n%s", err, patchFailureHint(current, oldText, target))
+		}
+		if err := kernel.ScanSkillForDangers(updated); err != nil {
+			return "", fmt.Errorf("security scan failed: %w", err)
+		}
+		if err := ValidateManagedSkillDescription(updated); err != nil {
+			return "", err
+		}
+		if err := validateSkillEnvironmentDeclarations(updated); err != nil {
+			return "", err
+		}
+		skillKey, err := resolvedSkillKey(tenantID, info)
+		if err != nil {
+			return "", err
+		}
+		parentDigest := sha256.Sum256([]byte(current))
+		parentVersionHash := fmt.Sprintf("%x", parentDigest[:])
+		_ = t.store.EnsureActiveSkillVersion(ContextFromArgs(args), tenantID, skillKey, info.Name, parentVersionHash, target, current)
+		digest := sha256.Sum256([]byte(updated))
+		evidenceHash := fmt.Sprintf("skill_manage:%s:%s:%x", action, info.Name, digest[:8])
+		versionHash, err := t.store.CreateSkillCandidateVersion(ContextFromArgs(args), tenantID, skillKey, info.Name, parentVersionHash, updated, evidenceHash, nil, map[string]string{
+			"source":   "skill_manage",
+			"action":   action,
+			"strategy": strategy,
+		})
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Skill candidate %s@%s staged (%d replacement, strategy=%s, mode=candidate_only, parent=%s); review or promote with /skills promote %s.", info.Name, versionHash, matches, strategy, parentVersionHash, versionHash), nil
+	default:
+		return "", authorizeSkillMutation(args, action)
+	}
 }
 
 func reloadSkillToolsFromArgs(tenantID string, args map[string]interface{}) {

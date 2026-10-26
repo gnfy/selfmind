@@ -148,7 +148,49 @@ func adoptCompletionObservationsTx(ctx context.Context, tx *sql.Tx, tenant, pers
 			finding.EvidenceRefs = keptRefs
 			continue
 		}
-		if len(finding.EvidenceRefs) > 1 {
+		if hasVerifyCheck || step.ReusePriorVerification {
+			for j, peer := range findings {
+				if j != i && peer.StepID == step.StepID {
+					finding.EvidenceRefs = nil
+					break
+				}
+			}
+			if len(finding.EvidenceRefs) == 0 {
+				continue
+			}
+		}
+		if finding.Result == "not_met" || finding.Result == "unknown" {
+			claimedByMetPeer := map[string]bool{}
+			for j, peer := range findings {
+				if j != i && peer.StepID != step.StepID && peer.Result == "met" {
+					for _, ref := range peer.EvidenceRefs {
+						claimedByMetPeer[ref] = true
+					}
+				}
+			}
+			start, end, winErr := workUnitEvidenceWindowTx(ctx, tx, runID, step.WorkUnitID)
+			var filtered []string
+			for _, ref := range finding.EvidenceRefs {
+				if claimedByMetPeer[ref] {
+					continue
+				}
+				var cursor int64
+				var kind string
+				if err := tx.QueryRowContext(ctx, `SELECT cursor,COALESCE(json_extract(payload_json,'$.evidence.kind'),'') FROM task_events WHERE run_id=? AND type='evidence.recorded' AND json_extract(payload_json,'$.evidence.tool_call_id')=? ORDER BY cursor DESC LIMIT 1`, runID, ref).Scan(&cursor, &kind); err == nil && kind != "verification" {
+					if winErr != nil || cursor <= start || cursor > end {
+						continue
+					}
+				}
+				filtered = append(filtered, ref)
+			}
+			if len(filtered) < len(finding.EvidenceRefs) {
+				finding.EvidenceRefs = filtered
+				if len(finding.EvidenceRefs) == 0 {
+					continue
+				}
+			}
+		}
+		if len(finding.EvidenceRefs) >= 1 {
 			start, end, err := workUnitEvidenceWindowTx(ctx, tx, runID, step.WorkUnitID)
 			if err == nil {
 				var freshRefs []string
@@ -172,6 +214,18 @@ func adoptCompletionObservationsTx(ctx context.Context, tx *sql.Tx, tenant, pers
 				}
 				if len(freshRefs) > 0 && len(freshRefs) < len(finding.EvidenceRefs) {
 					finding.EvidenceRefs = freshRefs
+				} else if len(freshRefs) == 0 && (hasVerifyCheck || step.ReusePriorVerification || (!step.VerificationRequired && finding.Result == "met" && len(findings) > 1)) {
+					hasMetPeer := hasVerifyCheck || step.ReusePriorVerification
+					for j, peer := range findings {
+						if j != i && peer.StepID != step.StepID && peer.Result == "met" && (peer.StepID != "" || len(peer.EvidenceRefs) > 0) {
+							hasMetPeer = true
+							break
+						}
+					}
+					if hasMetPeer {
+						finding.EvidenceRefs = nil
+						continue
+					}
 				}
 			}
 		}

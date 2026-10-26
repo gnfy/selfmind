@@ -87,7 +87,7 @@ func selfImprovementGuidanceForDefinitions(defs []map[string]interface{}) string
 	for _, def := range defs {
 		available[toolDefinitionName(def)] = true
 	}
-	return learningGuidance(available["memory"], available["session_search"], available["skill_manage"])
+	return learningGuidanceWithDiscovery(available["memory"], available["session_search"], available["skill_manage"], available["tool_search"])
 }
 
 func workContinuityGuidanceForDefinitions(defs []map[string]interface{}) string {
@@ -117,7 +117,11 @@ func workContinuityGuidanceForDefinitions(defs []map[string]interface{}) string 
 }
 
 func learningGuidance(hasMemory, hasSessionSearch, hasSkillManage bool) string {
-	if !hasMemory && !hasSessionSearch && !hasSkillManage {
+	return learningGuidanceWithDiscovery(hasMemory, hasSessionSearch, hasSkillManage, false)
+}
+
+func learningGuidanceWithDiscovery(hasMemory, hasSessionSearch, hasSkillManage, hasToolSearch bool) string {
+	if !hasMemory && !hasSessionSearch && !hasSkillManage && !hasToolSearch {
 		return ""
 	}
 	var sb strings.Builder
@@ -130,6 +134,9 @@ func learningGuidance(hasMemory, hasSessionSearch, hasSkillManage bool) string {
 	}
 	if hasSkillManage {
 		sb.WriteString("- skill_manage: save reusable procedures, debugging paths, workflow corrections, and tool-use patterns as skills.\n")
+	}
+	if hasToolSearch && (!hasMemory || !hasSkillManage) {
+		sb.WriteString("- tool_search: activate deferred memory or skill_manage tools when durable user preferences/context should be saved or when a reusable skill procedure/repair should be created or patched.\n")
 	}
 	if hasMemory {
 		sb.WriteString(`

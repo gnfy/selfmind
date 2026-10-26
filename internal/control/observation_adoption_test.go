@@ -304,18 +304,19 @@ func TestCompletionSkipsAuxiliaryObservationsOnVerifiedStepsAndNarrowsMixedFresh
 	}
 
 	// ResolveVerificationBinding when replaces points to an observation (toolcall-1-0) with explicit step_id binds cleanly to step2.
+	verifyDeps := []string{"/workspace/target.go"}
 	resolved, err := s.ResolveVerificationBinding(ctx, owner.TenantID, run.ID, verification.Binding{
 		StepID:            step2,
 		Replaces:          "toolcall-1-0",
 		Reason:            "run verify on step2",
-		LocalDependencies: &deps,
+		LocalDependencies: &verifyDeps,
 	}, "/workspace")
 	if err != nil || resolved == nil || resolved.StepID != step2 || resolved.Replaces != "" {
 		t.Fatalf("expected replaces on non-verify observation with explicit step_id to bind to step2, got %+v / %v", resolved, err)
 	}
 
 	// Record a passing verify check (toolcall-10-0) on step2 at t=30..35.
-	resolved.ResolvedLocalDependencies = deps
+	resolved.ResolvedLocalDependencies = verifyDeps
 	rawVerify, _ := json.Marshal(map[string]interface{}{
 		"evidence": map[string]interface{}{
 			"version": 1, "tool_call_id": "toolcall-10-0", "tool_name": "verify", "kind": "verification",
@@ -368,5 +369,20 @@ func TestCompletionSkipsAuxiliaryObservationsOnVerifiedStepsAndNarrowsMixedFresh
 	})
 	if err != nil || waitingCandidate == nil {
 		t.Fatalf("PrepareRunCompletion(waiting_user) deadlocked on stale assessment: %v", err)
+	}
+
+	// Non-required step1 with only stale observations (toolcall-1-0, toolcall-2-0) alongside verified step2 (met)
+	// in a multi-step "done" completion drops stale discovery refs on step1 instead of blocking completion.
+	doneCandidateAfterStaleStep1, err := s.PrepareRunCompletion(ctx, owner.TenantID, owner.PersonID, run.ID, RunCompletionInput{
+		ExpectedPlanVersion: plan.Plan.Version,
+		Status:              "done",
+		PlanPatch:           []RunPlanStepInput{{StepID: step2, Status: "completed"}},
+		Assessments: []verification.Assessment{
+			{StepID: step1, EvidenceRefs: []string{"toolcall-1-0", "toolcall-2-0"}, Result: "met", Reason: "Step 1 discovery completed earlier."},
+			{StepID: step2, EvidenceRefs: []string{"toolcall-10-0"}, Result: "met", Reason: "Step 2 verified."},
+		},
+	})
+	if err != nil || doneCandidateAfterStaleStep1 == nil {
+		t.Fatalf("PrepareRunCompletion(done) blocked on non-required step with stale discovery observations: %v", err)
 	}
 }

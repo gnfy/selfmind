@@ -1374,7 +1374,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if planSeen && !res.heldBeforeDispatch && !isLifecycleToolName(res.toolName) {
 				actionsSincePlanUpdate++
 			}
-			if res.success && !isLifecycleToolName(res.toolName) {
+			if res.success && (!isLifecycleToolName(res.toolName) || strings.TrimSpace(res.toolName) == "work_select") {
 				if _, seen := successfulActionEvidence[res.signature]; !seen {
 					successfulActionEvidence[res.signature] = struct{}{}
 					progressVersion++

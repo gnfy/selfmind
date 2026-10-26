@@ -43,10 +43,10 @@ const postRunAnalyzerSystemPrompt = `You are SelfMind's post-run maintenance ana
 Return one JSON object only, with this exact shape:
 {"memory_decisions":[{"target":"user","decision":"ADD","ref":"","content":"...","confidence":0.9,"durability":"durable","valid_until":"","category":""}]}
 
-memory_decisions: judge PERSONAL PREFERENCES ONLY — durable preferences, habits, and corrections the user EXPLICITLY stated this turn — against the existing nearby memories listed in the user prompt. target is always "user".
+memory_decisions: judge PERSONAL PREFERENCES ONLY — durable preferences, habits, identity/context facts, workflow rules, and corrections the user EXPLICITLY stated this turn — against the existing nearby memories listed in the user prompt. target is always "user".
 decision is one of SKIP (not an explicit personal preference, temporary, speculative, secret, or already fully represented), ADD (a genuinely new explicitly stated preference), REINFORCE (same meaning as an existing memory; do not rewrite it), SUPERSEDE (the user explicitly changed the referenced preference), CONFLICT (contradicts the referenced preference and both could be true).
 REINFORCE, SUPERSEDE, and CONFLICT must set ref to an id from the nearby list.
-Every non-SKIP decision must set durability: "durable" (a stable preference or rule the user stated), "time_bounded" (true only for a limited period; set valid_until to an RFC3339 time), or "episodic" (run progress, build status, in-progress state). Episodic content is never stored — prefer SKIP for it. Optionally set category (e.g. "preference", "communication", "identity").
+Every non-SKIP decision must set durability: "durable" (a stable preference or rule the user stated), "time_bounded" (true only for a limited period; set valid_until to an RFC3339 time), or "episodic" (run progress, build status, in-progress state). Episodic content is never stored — prefer SKIP for it. Optionally set category across the 3D personal memory spectrum: (1) personal preferences & communication style ("preference", "communication"), (2) personal identity, role, & long-term personal context ("identity", "context"), or (3) recurring personal workflow rules & collaboration habits ("workflow", "habit").
 Project facts, repository conventions, build commands, workspace state, and anything the user did not explicitly state as a preference are SKIP — they belong in repository convention files and task history, never in person memory.
 When a turn mixes a durable preference with request-local constraints (for example: just confirm, do not use tools, answer this turn in one sentence), extract only the durable preference. Never concatenate those temporary instructions into memory.
 Never store greetings, temporary status, speculative claims, secrets, credentials, raw command output, or facts that are only true during this run.
@@ -58,14 +58,14 @@ Return one JSON object only, with this exact shape:
 {"runs":[{"run_id":"run_...","memory_decisions":[{"target":"user","decision":"ADD","ref":"","content":"...","confidence":0.9,"durability":"durable","valid_until":"","category":""}]}]}
 
 Return exactly one entry for every offered run_id and never invent a run_id.
-For memory_decisions, judge PERSONAL PREFERENCES ONLY — durable preferences, habits, and corrections the user EXPLICITLY stated in that run — against only that run's nearby memories. target is always "user":
+For memory_decisions, judge PERSONAL PREFERENCES ONLY — durable preferences, habits, identity/context facts, workflow rules, and corrections the user EXPLICITLY stated in that run — against only that run's nearby memories. target is always "user":
 - SKIP: not an explicit personal preference, temporary, speculative, secret, episodic, or already fully represented. Project facts, repository conventions, build commands, and workspace state are always SKIP.
 - ADD: a genuinely new explicitly stated preference.
 - REINFORCE: the same meaning as an existing nearby memory; reference it and do not rewrite it.
 - SUPERSEDE: the user explicitly changed the referenced preference; reference the old memory and state the current truth.
 - CONFLICT: contradicts the referenced preference and both could be true; reference the conflicting memory.
 REINFORCE, SUPERSEDE, and CONFLICT must set ref to an id from that run's nearby list. Never carry a ref or decision across runs.
-Every non-SKIP decision must set durability: "durable", "time_bounded" (with valid_until RFC3339), or "episodic" (run progress or in-progress state — prefer SKIP; episodic content is never stored).
+Every non-SKIP decision must set durability: "durable", "time_bounded" (with valid_until RFC3339), or "episodic" (run progress or in-progress state — prefer SKIP; episodic content is never stored). Optionally set category across the 3D personal memory spectrum: ("preference", "communication"), ("identity", "context"), or ("workflow", "habit").
 When a run mixes a durable preference with request-local constraints (for example: just confirm, do not use tools, answer this turn in one sentence), extract only the durable preference. Never concatenate those temporary instructions into memory.
 Never store greetings, temporary status, speculative claims, secrets, credentials, raw command output, or facts that are only true during a run. Write memory content in the language of its supporting user statement and preserve technical identifiers verbatim.
 When several runs support the same durable fact, emit the durable change once on the strongest or latest supporting run and omit duplicate ADD decisions from the others. Use at most 6 memory decisions per run.

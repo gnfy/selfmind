@@ -239,3 +239,23 @@ func TestObservationCatalogCoversMeasuredReadVerbs(t *testing.T) {
 		}
 	}
 }
+
+func TestObservationBaselineAllowsFiniteLocalReadOnlyForLoop(t *testing.T) {
+	for _, command := range []string{
+		`for p in /a/one.txt /b/two.txt; do [ -f "$p" ] && echo "EXISTS: $p" || echo "MISSING: $p"; done`,
+		`for f in README.md AGENTS.md; do ls -la "$f"; done`,
+	} {
+		if !provenReadOnly(t, command) {
+			t.Errorf("finite local read-only for-loop must be provable read-only: %s", command)
+		}
+	}
+	for _, command := range []string{
+		`for p in a a; do echo "$p"; done`,
+		`for p in a b; do ls; done`,
+		`for p in a b; do rm -f "$p"; done`,
+	} {
+		if provenReadOnly(t, command) {
+			t.Errorf("invalid or mutating local for-loop must NOT be provable read-only: %s", command)
+		}
+	}
+}

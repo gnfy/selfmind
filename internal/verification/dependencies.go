@@ -13,6 +13,19 @@ type Mutation struct {
 }
 
 func RelevantMutationAt(check Check, mutations []Mutation) int64 {
+	if check.Binding != nil && check.Binding.Version == 3 && check.Binding.LocalDependencies == nil && len(check.Binding.UnresolvedLocalDependencies) == 0 && check.CWD != "" && filepath.IsAbs(check.CWD) {
+		target := strings.TrimSpace(check.Binding.Target)
+		if target != "" && target != check.Binding.StepID && !strings.ContainsAny(target, " \t\n\r") && strings.Contains(target, "/") {
+			dep := target
+			if !filepath.IsAbs(dep) {
+				dep = filepath.Join(check.CWD, dep)
+			}
+			deps := []string{filepath.Clean(dep)}
+			binding := *check.Binding
+			binding.LocalDependencies = &deps
+			check.Binding = &binding
+		}
+	}
 	latest := int64(0)
 	for _, mutation := range mutations {
 		affected := true

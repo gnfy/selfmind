@@ -288,6 +288,12 @@ func TestPersistentLearningGuidanceMentionsOnlyAvailableSurfaces(t *testing.T) {
 			t.Fatalf("learning prompt invented unavailable surface %q: %s", absent, guidance)
 		}
 	}
+
+	deferredDefs := []map[string]interface{}{{"name": "session_search"}, {"name": "tool_search"}}
+	deferredGuidance := selfImprovementGuidanceForDefinitions(deferredDefs)
+	if !strings.Contains(deferredGuidance, "tool_search:") || !strings.Contains(deferredGuidance, "skill_manage") {
+		t.Fatalf("expected tool_search guidance to mention deferred memory/skill_manage activation, got: %s", deferredGuidance)
+	}
 }
 
 func TestWorkContinuityGuidanceRequiresScopedProgressiveInspection(t *testing.T) {
